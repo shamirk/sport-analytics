@@ -3,32 +3,21 @@
 from __future__ import annotations
 
 import re
-import time
-import uuid
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal, get_db
 from app.limiter import limiter
 from app.models import ClassifierResult, CurrentClassification, Division, MatchResult, Member
+from app.services.cache import CACHE_TTL, cache
+from app.services.task_manager import create_job, get_pending_job, job_status, scrape_and_store
 
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/api")
-
-# ---------------------------------------------------------------------------
-# In-memory stores
-# ---------------------------------------------------------------------------
-
-# Cache: key -> {"data": any, "expires_at": float (monotonic)}
-_cache: dict[str, dict] = {}
-CACHE_TTL_SECONDS: float = 86_400  # 24 hours
-
-# Job tracking: job_id -> {"status": str, "member_number": str, "error"?: str, "data"?: any}
-_jobs: dict[str, dict] = {}
 
 MEMBER_NUMBER_RE = re.compile(r"^[A-Za-z0-9]{5,10}$")
 
@@ -50,19 +39,6 @@ def _validate_member_number(member_number: str) -> str:
     return member_number.upper()
 
 
-def _cache_get(key: str) -> Any | None:
-    entry = _cache.get(key)
-    if entry and entry["expires_at"] > time.monotonic():
-        return entry["data"]
-    if entry:
-        del _cache[key]
-    return None
-
-
-def _cache_set(key: str, data: Any, ttl: float = CACHE_TTL_SECONDS) -> None:
-    _cache[key] = {"data": data, "expires_at": time.monotonic() + ttl}
-
-
 def _get_member_or_404(member_number: str, db: Session) -> Member:
     member = db.query(Member).filter(Member.member_number == member_number).first()
     if not member:
@@ -78,39 +54,13 @@ def _get_member_or_404(member_number: str, db: Session) -> Member:
 
 
 async def _run_scrape(job_id: str, member_number: str) -> None:
-    from datetime import datetime, timezone
-
-    from app.services.uspsa_scraper import MemberNotFoundError, USPSAScraper
-
+    """Thin wrapper used by BackgroundTasks to invoke the task manager."""
+    db = SessionLocal()
     try:
-        scraper = USPSAScraper()
-        data = await scraper.scrape_member(member_number)
-
-        db = SessionLocal()
-        try:
-            member = db.query(Member).filter(Member.member_number == member_number).first()
-            if not member:
-                member = Member(member_number=member_number)
-                db.add(member)
-                db.flush()
-            member.last_scraped_at = datetime.now(timezone.utc)
-            db.commit()
-        finally:
-            db.close()
-
-        _cache_set(f"analyze:{member_number}", data)
-        _jobs[job_id]["status"] = "complete"
-        _jobs[job_id]["data"] = data
-        logger.info("scrape_complete", job_id=job_id, member_number=member_number)
-
-    except MemberNotFoundError:
-        _jobs[job_id]["status"] = "error"
-        _jobs[job_id]["error"] = f"Member {member_number} not found in USPSA"
-        logger.warning("member_not_found", job_id=job_id, member_number=member_number)
-    except Exception as exc:
-        _jobs[job_id]["status"] = "error"
-        _jobs[job_id]["error"] = str(exc)
-        logger.error("scrape_failed", job_id=job_id, member_number=member_number, error=str(exc))
+        # Patch job_id into status before delegating (create_job already inserted it)
+        await scrape_and_store(member_number, db)
+    finally:
+        db.close()
 
 
 # ---------------------------------------------------------------------------
@@ -132,19 +82,17 @@ async def analyze_member(
     """
     member_number = _validate_member_number(member_number)
 
-    cached = _cache_get(f"analyze:{member_number}")
+    cached = cache.get(f"analyze:{member_number}")
     if cached:
         response.status_code = 200
         return {"status": "complete", "data": cached}
 
-    # Return existing pending job if one exists
-    for jid, job in _jobs.items():
-        if job["member_number"] == member_number and job["status"] == "pending":
-            response.status_code = 202
-            return {"status": "pending", "job_id": jid}
+    pending = get_pending_job(member_number)
+    if pending:
+        response.status_code = 202
+        return {"status": "pending", "job_id": pending}
 
-    job_id = str(uuid.uuid4())
-    _jobs[job_id] = {"status": "pending", "member_number": member_number}
+    job_id = create_job(member_number)
     background_tasks.add_task(_run_scrape, job_id, member_number)
 
     response.status_code = 202
@@ -152,7 +100,7 @@ async def analyze_member(
 
 
 @router.get("/member/{member_number}")
-@limiter.limit("10/minute")
+@limiter.limit("60/minute")
 async def get_member(
     member_number: str,
     request: Request,
@@ -186,19 +134,24 @@ async def get_member(
 
 
 @router.get("/member/{member_number}/dashboard")
-@limiter.limit("10/minute")
+@limiter.limit("60/minute")
 async def get_member_dashboard(
     member_number: str,
     request: Request,
+    refresh: bool = Query(False, description="Force cache refresh"),
     db: Session = Depends(get_db),
 ):
-    """Return complete dashboard data, cached for 24 hours."""
+    """Return complete dashboard data, cached for CACHE_TTL seconds.
+
+    Pass ?refresh=true to bypass and repopulate the cache.
+    """
     member_number = _validate_member_number(member_number)
 
     cache_key = f"dashboard:{member_number}"
-    cached = _cache_get(cache_key)
-    if cached:
-        return cached
+    if not refresh:
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
 
     member = _get_member_or_404(member_number, db)
 
@@ -238,7 +191,6 @@ async def get_member_dashboard(
         ],
     }
 
-    # Time series: classifier scores over time, grouped by division
     time_series: dict[str, list] = {}
     for cr, div in classifier_results:
         entries = time_series.setdefault(div.name, [])
@@ -290,23 +242,22 @@ async def get_member_dashboard(
         "match_stats": match_stats,
     }
 
-    _cache_set(cache_key, result)
+    cache.set(cache_key, result, ttl=CACHE_TTL)
     return result
 
 
 @router.get("/member/{member_number}/status")
-@limiter.limit("10/minute")
+@limiter.limit("60/minute")
 async def get_member_status(
     member_number: str,
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """Return scraping status for a member: pending/complete/error/not_started."""
+    """Return scraping status for a member: pending/in_progress/complete/error/not_started."""
     member_number = _validate_member_number(member_number)
 
-    # Find jobs for this member (most recent by job_id, which is uuid4 time-ordered)
     member_jobs = [
-        (jid, job) for jid, job in _jobs.items()
+        (jid, job) for jid, job in job_status.items()
         if job["member_number"] == member_number
     ]
 
@@ -321,7 +272,6 @@ async def get_member_status(
             resp["error"] = job.get("error", "Unknown error")
         return resp
 
-    # No jobs — check DB for prior scrape
     member = db.query(Member).filter(Member.member_number == member_number).first()
     if member and member.last_scraped_at:
         return {
