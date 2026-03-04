@@ -35,5 +35,5 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# Alembic versions (generated)
-alembic/versions/*.py
+# Alembic versions are tracked in git
+

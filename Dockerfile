@@ -12,7 +12,10 @@ RUN pip install --no-cache-dir -e .
 
 RUN playwright install chromium --with-deps
 
-COPY . .
+COPY app/ ./app/
+
+RUN useradd --system --no-create-home appuser && chown -R appuser /code
+USER appuser
 
 EXPOSE 8000
 
