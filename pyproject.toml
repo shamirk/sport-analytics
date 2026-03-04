@@ -28,6 +28,9 @@ dependencies = [
     "python-multipart>=0.0.9",
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
