@@ -159,114 +159,92 @@ def _table_rows(table: Any) -> list[list[str]]:
 
 
 def _parse_classifications(soup: BeautifulSoup) -> list[dict]:
-    """Parse the Classification Summary table."""
+    """Parse the Classifications table.
+
+    Actual page structure (Table 3):
+      Row 0: ['Classifications']  ← single header cell
+      Row N: ['Open', 'Class: U', 'Pct: 0.0000', 'High Pct: 0.0000']
+    """
     results = []
-    # Look for tables with classification data (division + class + pct columns)
     for table in soup.find_all("table"):
         rows = _table_rows(table)
         if not rows:
             continue
-        header = [h.lower() for h in rows[0]]
-        if not any("division" in h or "class" in h for h in header):
+        # Identify by single-cell header "Classifications"
+        if rows[0] != ["Classifications"]:
             continue
-
-        # Try to map columns
-        col = _col_map(header, {
-            "division": ["division", "div"],
-            "class": ["class", "classification"],
-            "pct": ["pct", "percent", "%", "percentage"],
-        })
         for row in rows[1:]:
-            if len(row) <= max(col.values(), default=-1):
+            if len(row) < 3:
                 continue
-            entry: dict = {}
-            if "division" in col:
-                entry["division"] = row[col["division"]]
-            if "class" in col:
-                entry["class"] = row[col["class"]]
-            if "pct" in col:
-                entry["percentage"] = _safe_float(row[col["pct"]])
-            if entry:
-                results.append(entry)
-        if results:
-            break
+            # row[0] = division name, row[1] = "Class: X", row[2] = "Pct: X.XXXX"
+            division = row[0].strip()
+            cls = row[1].replace("Class:", "").strip() if len(row) > 1 else None
+            pct = _safe_float(row[2].replace("Pct:", "").strip()) if len(row) > 2 else None
+            high_pct = _safe_float(row[3].replace("High Pct:", "").strip()) if len(row) > 3 else None
+            if division:
+                results.append({
+                    "division": division,
+                    "class": cls,
+                    "percentage": pct,
+                    "high_percentage": high_pct,
+                })
+        break
     return results
 
 
 def _parse_classifier_scores(soup: BeautifulSoup) -> list[dict]:
-    """Parse the Classifier History table."""
+    """Parse per-division classifier score tables.
+
+    Actual page structure (one table per division, e.g. Tables 5-7):
+      Row 0: ['Limited Optics Classifiers(Click to Expand)']  ← division title
+      Row 1: ['Date', 'Number', 'Club', 'F', 'Percent', 'HF', 'Entered', 'Source']
+      Row N: ['3/01/26', '99-11', 'Custer Sportsmens Club', 'Y', '66.7947', '7.0773', ...]
+    """
     results = []
     for table in soup.find_all("table"):
         rows = _table_rows(table)
-        if not rows:
+        if len(rows) < 2:
             continue
-        header = [h.lower() for h in rows[0]]
-        if not any("classifier" in h or "hit factor" in h for h in header):
+        title = rows[0][0] if rows[0] else ""
+        if "Classifiers" not in title:
             continue
 
+        # Extract division name from title like "Limited Optics Classifiers(Click to Expand)"
+        division = re.sub(r"\s*Classifiers.*", "", title).strip()
+
+        # Row 1 must be the column header row
+        header = [h.lower() for h in rows[1]]
         col = _col_map(header, {
             "date": ["date"],
-            "match": ["match", "match name"],
-            "classifier": ["classifier", "classifier #", "classifier number", "number"],
-            "hit_factor": ["hit factor", "hf"],
-            "points": ["points", "pts"],
-            "percentage": ["pct", "percent", "%", "percentage"],
-            "division": ["division", "div"],
-            "class": ["class", "classification"],
+            "classifier": ["number"],
+            "club": ["club"],
+            "used": ["f"],
+            "percentage": ["percent"],
+            "hit_factor": ["hf"],
+            "entered": ["entered"],
+            "source": ["source"],
         })
-        for row in rows[1:]:
-            entry: dict = {}
+
+        for row in rows[2:]:
+            if len(row) < 4:
+                continue
+            entry: dict = {"division": division}
             for key, idx in col.items():
                 if idx < len(row):
                     val = row[idx]
                     if key in ("hit_factor", "percentage"):
                         entry[key] = _safe_float(val)
-                    elif key == "points":
-                        entry[key] = _safe_int(val)
                     else:
                         entry[key] = val
-            if entry:
-                results.append(entry)
-        if results:
-            break
+            results.append(entry)
+
     return results
 
 
 def _parse_match_results(soup: BeautifulSoup) -> list[dict]:
-    """Parse the Match Results section if present."""
-    results = []
-    for table in soup.find_all("table"):
-        rows = _table_rows(table)
-        if not rows:
-            continue
-        header = [h.lower() for h in rows[0]]
-        if not any("match" in h for h in header) or any("classifier" in h for h in header):
-            continue
-
-        col = _col_map(header, {
-            "date": ["date"],
-            "match": ["match", "match name"],
-            "division": ["division", "div"],
-            "class": ["class"],
-            "place": ["place", "rank"],
-            "score": ["score", "pct", "percent"],
-        })
-        for row in rows[1:]:
-            entry: dict = {}
-            for key, idx in col.items():
-                if idx < len(row):
-                    val = row[idx]
-                    if key == "score":
-                        entry[key] = _safe_float(val)
-                    elif key == "place":
-                        entry[key] = _safe_int(val)
-                    else:
-                        entry[key] = val
-            if entry:
-                results.append(entry)
-        if results:
-            break
-    return results
+    """USPSA classification page does not include a match results section.
+    Returns empty list — match results would require a separate endpoint."""
+    return []
 
 
 def _col_map(header: list[str], wanted: dict[str, list[str]]) -> dict[str, int]:
