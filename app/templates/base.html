@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}USPSA Analytics{% endblock %}</title>
+
+  <!-- HTMX -->
+  <script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <!-- Chart.js date adapter -->
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+
+  <style>
+    /* ── CSS Variables (dark/light themes) ─────────────────────────── */
+    :root {
+      --bg-primary: #0f1117;
+      --bg-secondary: #1a1d27;
+      --bg-card: #1e2130;
+      --bg-hover: #252840;
+      --border: #2d3148;
+      --text-primary: #e2e8f0;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --accent-dim: rgba(99, 102, 241, 0.15);
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --chart-grid: rgba(148, 163, 184, 0.08);
+      --shadow: 0 4px 24px rgba(0,0,0,0.4);
+    }
+
+    [data-theme="light"] {
+      --bg-primary: #f1f5f9;
+      --bg-secondary: #ffffff;
+      --bg-card: #ffffff;
+      --bg-hover: #f8fafc;
+      --border: #e2e8f0;
+      --text-primary: #0f172a;
+      --text-secondary: #475569;
+      --text-muted: #94a3b8;
+      --accent: #4f46e5;
+      --accent-hover: #6366f1;
+      --accent-dim: rgba(79, 70, 229, 0.1);
+      --chart-grid: rgba(15, 23, 42, 0.06);
+      --shadow: 0 4px 24px rgba(0,0,0,0.08);
+    }
+
+    /* ── Reset & Base ───────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    /* ── Navigation ─────────────────────────────────────────────────── */
+    nav {
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      padding: 0 1.5rem;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 60px;
+    }
+
+    .nav-brand {
+      font-size: 1.125rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .nav-brand .logo-icon { color: var(--accent); font-size: 1.25rem; }
+
+    .nav-actions { display: flex; align-items: center; gap: 0.75rem; }
+
+    /* ── Theme Toggle ───────────────────────────────────────────────── */
+    .theme-toggle {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      width: 36px; height: 36px;
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1rem;
+      transition: background 0.2s, color 0.2s;
+    }
+    .theme-toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+    /* ── Main Layout ────────────────────────────────────────────────── */
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem;
+    }
+
+    /* ── Cards ──────────────────────────────────────────────────────── */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      box-shadow: var(--shadow);
+    }
+
+    .card-title {
+      font-size: 0.875rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 0.75rem;
+    }
+
+    /* ── Grid ───────────────────────────────────────────────────────── */
+    .grid { display: grid; gap: 1rem; }
+    .grid-2 { grid-template-columns: repeat(2, 1fr); }
+    .grid-3 { grid-template-columns: repeat(3, 1fr); }
+    .grid-4 { grid-template-columns: repeat(4, 1fr); }
+    .grid-5 { grid-template-columns: repeat(5, 1fr); }
+
+    @media (max-width: 1024px) {
+      .grid-4, .grid-5 { grid-template-columns: repeat(2, 1fr); }
+      .grid-3 { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 640px) {
+      .grid-2, .grid-3, .grid-4, .grid-5 { grid-template-columns: 1fr; }
+    }
+
+    /* ── Stat Cards ─────────────────────────────────────────────────── */
+    .stat-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem 1.5rem;
+    }
+    .stat-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 0.5rem;
+    }
+    .stat-value {
+      font-size: 1.75rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      line-height: 1;
+    }
+    .stat-sub {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.375rem;
+    }
+
+    /* ── Buttons ────────────────────────────────────────────────────── */
+    .btn {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      padding: 0.625rem 1.25rem;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+      border: none;
+      text-decoration: none;
+    }
+    .btn:active { transform: scale(0.97); }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+    .btn-primary:hover { background: var(--accent-hover); }
+
+    .btn-secondary {
+      background: var(--bg-card);
+      color: var(--text-secondary);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+    /* ── Form elements ──────────────────────────────────────────────── */
+    input, select {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      padding: 0.625rem 0.875rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus, select:focus { border-color: var(--accent); }
+    input::placeholder { color: var(--text-muted); }
+
+    /* ── Table ──────────────────────────────────────────────────────── */
+    table { width: 100%; border-collapse: collapse; }
+    th {
+      text-align: left;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    td {
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.875rem;
+      color: var(--text-secondary);
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--bg-hover); }
+
+    /* ── Badge ──────────────────────────────────────────────────────── */
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.6rem;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .badge-gm { background: rgba(234,179,8,0.15); color: #eab308; }
+    .badge-m  { background: rgba(239,68,68,0.15);  color: #ef4444; }
+    .badge-a  { background: rgba(168,85,247,0.15); color: #a855f7; }
+    .badge-b  { background: rgba(59,130,246,0.15); color: #3b82f6; }
+    .badge-c  { background: rgba(34,197,94,0.15);  color: #22c55e; }
+    .badge-d  { background: rgba(107,114,128,0.15);color: #6b7280; }
+    .badge-u  { background: rgba(107,114,128,0.1); color: #94a3b8; }
+
+    /* ── Loading / Error states ─────────────────────────────────────── */
+    .spinner {
+      display: inline-block;
+      width: 48px; height: 48px;
+      border: 4px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .loading-state, .error-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      padding: 3rem;
+      text-align: center;
+    }
+
+    .error-icon { font-size: 2.5rem; }
+    .error-message { color: var(--text-secondary); max-width: 400px; }
+
+    /* ── Section headers ────────────────────────────────────────────── */
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1rem;
+    }
+    .section-title {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    /* ── Divider ────────────────────────────────────────────────────── */
+    .divider { height: 1px; background: var(--border); margin: 1.5rem 0; }
+
+    /* ── Utilities ──────────────────────────────────────────────────── */
+    .text-accent { color: var(--accent); }
+    .text-muted  { color: var(--text-muted); }
+    .text-success { color: var(--success); }
+    .text-warning { color: var(--warning); }
+    .text-danger  { color: var(--danger); }
+    .mt-1 { margin-top: 0.5rem; }
+    .mt-2 { margin-top: 1rem; }
+    .mt-3 { margin-top: 1.5rem; }
+    .mb-1 { margin-bottom: 0.5rem; }
+    .mb-2 { margin-bottom: 1rem; }
+    .mb-3 { margin-bottom: 1.5rem; }
+    .gap-1 { gap: 0.5rem; }
+
+    {% block extra_styles %}{% endblock %}
+  </style>
+</head>
+<body>
+  <nav>
+    <a class="nav-brand" href="/">
+      <span class="logo-icon">&#x2318;</span>
+      USPSA Analytics
+    </a>
+    <div class="nav-actions">
+      {% block nav_extra %}{% endblock %}
+      <button class="theme-toggle" id="themeToggle" title="Toggle theme">&#x263D;</button>
+    </div>
+  </nav>
+
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  <script>
+    // ── Dark/light theme persistence ──────────────────────────────────
+    (function () {
+      const saved = localStorage.getItem('theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', saved);
+      const btn = document.getElementById('themeToggle');
+      if (btn) btn.textContent = saved === 'dark' ? '\u263D' : '\u2600';
+    })();
+
+    document.getElementById('themeToggle').addEventListener('click', function () {
+      const html = document.documentElement;
+      const current = html.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      html.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      this.textContent = next === 'dark' ? '\u263D' : '\u2600';
+    });
+  </script>
+  {% block extra_scripts %}{% endblock %}
+</body>
+</html>

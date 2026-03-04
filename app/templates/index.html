@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+
+{% block title %}USPSA Analytics — Member Lookup{% endblock %}
+
+{% block extra_styles %}
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - 120px);
+  text-align: center;
+  gap: 2rem;
+}
+
+.hero-headline {
+  font-size: clamp(2rem, 5vw, 3.5rem);
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+}
+.hero-sub {
+  font-size: 1.125rem;
+  color: var(--text-secondary);
+  max-width: 480px;
+}
+
+.lookup-form {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  width: 100%;
+  max-width: 520px;
+}
+
+.lookup-form input {
+  flex: 1;
+  min-width: 200px;
+  font-size: 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  text-transform: uppercase;
+}
+
+.lookup-form .btn {
+  padding: 0.75rem 1.5rem;
+  font-size: 1rem;
+  border-radius: 10px;
+}
+
+.error-banner {
+  background: rgba(239,68,68,0.12);
+  border: 1px solid rgba(239,68,68,0.3);
+  color: #ef4444;
+  padding: 0.75rem 1.25rem;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  max-width: 520px;
+  width: 100%;
+  display: none;
+}
+.error-banner.visible { display: block; }
+
+.features {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  max-width: 720px;
+  width: 100%;
+  margin-top: 1rem;
+}
+@media (max-width: 640px) { .features { grid-template-columns: 1fr; } }
+
+.feature {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem;
+  text-align: left;
+}
+.feature-icon { font-size: 1.5rem; margin-bottom: 0.5rem; }
+.feature-title { font-size: 0.875rem; font-weight: 700; margin-bottom: 0.25rem; }
+.feature-desc { font-size: 0.8rem; color: var(--text-muted); }
+
+#loadingOverlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 1rem;
+}
+#loadingOverlay.visible { display: flex; }
+#loadingOverlay .loading-text { color: #e2e8f0; font-size: 1rem; }
+{% endblock %}
+
+{% block content %}
+<div class="hero">
+  <div>
+    <div class="hero-headline">
+      USPSA <span class="text-accent">Analytics</span>
+    </div>
+    <p class="hero-sub mt-1">
+      Deep-dive into classifier performance, division trends, and shooting stats.
+    </p>
+  </div>
+
+  <form class="lookup-form" id="lookupForm" onsubmit="handleLookup(event)">
+    <input
+      type="text"
+      id="memberInput"
+      placeholder="Member number (e.g. A12345)"
+      maxlength="10"
+      autocomplete="off"
+      spellcheck="false"
+    />
+    <button type="submit" class="btn btn-primary">Analyze</button>
+  </form>
+
+  <div class="error-banner" id="errorBanner"></div>
+
+  <div class="features">
+    <div class="feature">
+      <div class="feature-icon">&#x1F4CA;</div>
+      <div class="feature-title">% Over Time</div>
+      <div class="feature-desc">Track your classifier percentage with rolling averages</div>
+    </div>
+    <div class="feature">
+      <div class="feature-icon">&#x1F3AF;</div>
+      <div class="feature-title">Hit Factor Trends</div>
+      <div class="feature-desc">See per-classifier hit factor with personal bests</div>
+    </div>
+    <div class="feature">
+      <div class="feature-icon">&#x1F4E1;</div>
+      <div class="feature-title">Division Breakdown</div>
+      <div class="feature-desc">Radar and bar charts across all active divisions</div>
+    </div>
+  </div>
+</div>
+
+<!-- Loading overlay -->
+<div id="loadingOverlay">
+  <div class="spinner"></div>
+  <div class="loading-text" id="loadingText">Fetching data...</div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+async function handleLookup(e) {
+  e.preventDefault();
+  const raw = document.getElementById('memberInput').value.trim().toUpperCase();
+  const errBanner = document.getElementById('errorBanner');
+
+  if (!raw) {
+    showError('Please enter a member number.');
+    return;
+  }
+  if (!/^[A-Z0-9]{5,10}$/.test(raw)) {
+    showError('Member number must be 5–10 alphanumeric characters.');
+    return;
+  }
+
+  hideError();
+  showLoading('Initiating scrape…');
+
+  try {
+    // Trigger scrape
+    const resp = await fetch(`/api/analyze/${raw}`, { method: 'POST' });
+    const body = await resp.json();
+
+    if (!resp.ok) {
+      throw new Error(body.detail || 'Scraping failed');
+    }
+
+    if (body.status === 'complete') {
+      // Data already cached — go straight to dashboard
+      window.location.href = `/dashboard/${raw}`;
+      return;
+    }
+
+    // Pending — poll status
+    const jobId = body.job_id;
+    updateLoadingText('Scraping USPSA data…');
+    await pollJob(raw, jobId);
+
+  } catch (err) {
+    hideLoading();
+    showError(err.message || 'An unexpected error occurred.');
+  }
+}
+
+async function pollJob(memberNumber, jobId) {
+  const maxAttempts = 60;
+  let attempts = 0;
+
+  while (attempts < maxAttempts) {
+    await sleep(2000);
+    attempts++;
+
+    try {
+      const resp = await fetch(`/api/member/${memberNumber}/status`);
+      const body = await resp.json();
+
+      if (body.status === 'complete') {
+        updateLoadingText('Done! Loading dashboard…');
+        window.location.href = `/dashboard/${memberNumber}`;
+        return;
+      }
+
+      if (body.status === 'error') {
+        hideLoading();
+        showError(body.error || 'Scraping failed. Please try again.');
+        return;
+      }
+
+      // still pending
+      const eta = Math.max(0, (maxAttempts - attempts) * 2);
+      updateLoadingText(`Scraping in progress… (~${eta}s remaining)`);
+
+    } catch (fetchErr) {
+      // transient fetch error — continue polling
+    }
+  }
+
+  hideLoading();
+  showError('Timed out waiting for data. Please try again.');
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function showError(msg) {
+  const el = document.getElementById('errorBanner');
+  el.textContent = msg;
+  el.classList.add('visible');
+}
+function hideError() { document.getElementById('errorBanner').classList.remove('visible'); }
+function showLoading(msg) {
+  document.getElementById('loadingText').textContent = msg;
+  document.getElementById('loadingOverlay').classList.add('visible');
+}
+function updateLoadingText(msg) { document.getElementById('loadingText').textContent = msg; }
+function hideLoading() { document.getElementById('loadingOverlay').classList.remove('visible'); }
+</script>
+{% endblock %}

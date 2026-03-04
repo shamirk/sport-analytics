@@ -1,0 +1,720 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard — {{ member_number }} | USPSA Analytics{% endblock %}
+
+{% block extra_styles %}
+/* ── Dashboard-specific styles ────────────────────────────────── */
+.dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.member-id {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.25rem;
+}
+.member-number-heading {
+  font-size: 2rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  line-height: 1;
+}
+.last-scraped {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 0.375rem;
+}
+
+/* Chart containers */
+.chart-wrap { position: relative; width: 100%; }
+.chart-wrap canvas { max-height: 320px; }
+.chart-wrap-tall canvas { max-height: 400px; }
+.chart-wrap-sm canvas { max-height: 240px; }
+
+/* Filter bar */
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+.filter-bar select, .filter-bar input { padding: 0.4rem 0.75rem; font-size: 0.8rem; }
+.filter-bar label { font-size: 0.8rem; color: var(--text-muted); }
+
+/* Rolling toggles */
+.toggle-group { display: flex; gap: 0.375rem; }
+.toggle-btn {
+  padding: 0.3rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  transition: background 0.15s, color 0.15s;
+}
+.toggle-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* Classification table */
+.class-table td:first-child { color: var(--text-primary); font-weight: 600; }
+.pct-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.pct-track {
+  flex: 1;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.pct-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+/* Sparkline placeholder */
+.sparkline { display: inline-block; width: 80px; height: 28px; }
+
+/* Top/Bottom table */
+.num-rank { color: var(--text-muted); font-size: 0.75rem; min-width: 1.5rem; }
+.pct-up   { color: var(--success); }
+.pct-down { color: var(--danger); }
+{% endblock %}
+
+{% block nav_extra %}
+<a href="/" class="btn btn-secondary" style="padding: 0.4rem 0.875rem; font-size: 0.8rem;">
+  &#x2190; New Search
+</a>
+{% endblock %}
+
+{% block content %}
+<!-- ── Dashboard header ──────────────────────────────────────────────── -->
+<div class="dashboard-header">
+  <div>
+    <div class="member-id">Member</div>
+    <div class="member-number-heading">{{ member_number }}</div>
+    <div class="last-scraped" id="lastScraped">Loading data…</div>
+  </div>
+  <button class="btn btn-secondary" onclick="refreshData()">&#x21BA; Refresh</button>
+</div>
+
+<!-- Error / loading states -->
+<div id="pageError" class="card" style="display:none;">
+  <div class="error-state">
+    <div class="error-icon">&#x26A0;&#xFE0F;</div>
+    <div class="error-message" id="pageErrorMsg"></div>
+    <button class="btn btn-primary" onclick="loadDashboard()">Retry</button>
+  </div>
+</div>
+
+<div id="pageLoading" class="card">
+  <div class="loading-state">
+    <div class="spinner"></div>
+    <div class="text-muted">Loading dashboard…</div>
+  </div>
+</div>
+
+<div id="dashboardContent" style="display:none;">
+
+  <!-- ── 1. Overview Panel ───────────────────────────────────────────── -->
+  <section>
+    <div class="grid grid-5 mb-2" id="overviewStats">
+      <!-- Filled by JS -->
+    </div>
+    <!-- Classification table -->
+    <div class="card mb-2">
+      <div class="card-title">Current Classifications</div>
+      <table class="class-table" id="classTable">
+        <thead>
+          <tr>
+            <th>Division</th>
+            <th>Class</th>
+            <th>Percentage</th>
+            <th style="min-width:180px;">Progress</th>
+          </tr>
+        </thead>
+        <tbody id="classTableBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ── 2. Classifier % Over Time ──────────────────────────────────── -->
+  <section class="card mb-2">
+    <div class="section-header">
+      <div class="section-title">Classifier % Over Time</div>
+    </div>
+    <div class="filter-bar">
+      <label>Division</label>
+      <select id="divisionFilter" onchange="updateTimeSeriesChart()"></select>
+      <label>Rolling avg</label>
+      <div class="toggle-group" id="rollingToggles">
+        <button class="toggle-btn active" data-window="0" onclick="setRolling(this, 0)">None</button>
+        <button class="toggle-btn" data-window="5"  onclick="setRolling(this, 5)">5</button>
+        <button class="toggle-btn" data-window="10" onclick="setRolling(this, 10)">10</button>
+        <button class="toggle-btn" data-window="20" onclick="setRolling(this, 20)">20</button>
+      </div>
+      <label>From</label>
+      <input type="date" id="dateFrom" onchange="updateTimeSeriesChart()" />
+      <label>To</label>
+      <input type="date" id="dateTo" onchange="updateTimeSeriesChart()" />
+    </div>
+    <div class="chart-wrap chart-wrap-tall">
+      <canvas id="timeSeriesChart"></canvas>
+    </div>
+  </section>
+
+  <!-- ── 3. Hit Factor Trend ─────────────────────────────────────────── -->
+  <section class="card mb-2">
+    <div class="section-header">
+      <div class="section-title">Hit Factor Trend</div>
+    </div>
+    <div class="filter-bar">
+      <label>Division</label>
+      <select id="hfDivisionFilter" onchange="updateHFChart()"></select>
+    </div>
+    <div class="chart-wrap chart-wrap-tall">
+      <canvas id="hfChart"></canvas>
+    </div>
+  </section>
+
+  <!-- ── 4. Division Analytics ──────────────────────────────────────── -->
+  <div class="grid grid-2 mb-2">
+    <section class="card">
+      <div class="card-title">Avg % per Division</div>
+      <div class="chart-wrap">
+        <canvas id="divBarChart"></canvas>
+      </div>
+    </section>
+    <section class="card">
+      <div class="card-title">Division Radar</div>
+      <div class="chart-wrap">
+        <canvas id="divRadarChart"></canvas>
+      </div>
+    </section>
+  </div>
+
+  <!-- ── 5. Classifier Breakdown ────────────────────────────────────── -->
+  <div class="grid grid-2 mb-2">
+    <section class="card">
+      <div class="section-header">
+        <div class="section-title">Top 10 Classifiers</div>
+      </div>
+      <table>
+        <thead><tr><th>#</th><th>Classifier</th><th>Division</th><th>%</th></tr></thead>
+        <tbody id="top10Body"></tbody>
+      </table>
+    </section>
+    <section class="card">
+      <div class="section-header">
+        <div class="section-title">Bottom 10 Classifiers</div>
+      </div>
+      <table>
+        <thead><tr><th>#</th><th>Classifier</th><th>Division</th><th>%</th></tr></thead>
+        <tbody id="bottom10Body"></tbody>
+      </table>
+    </section>
+  </div>
+
+  <!-- Frequency chart -->
+  <section class="card mb-2">
+    <div class="card-title">Classifier Frequency</div>
+    <div class="chart-wrap">
+      <canvas id="freqChart"></canvas>
+    </div>
+  </section>
+
+  <!-- ── 6. Statistical Summary ─────────────────────────────────────── -->
+  <section class="card mb-2">
+    <div class="card-title">Statistical Summary</div>
+    <div class="grid grid-3" id="statsGrid"></div>
+  </section>
+
+</div><!-- /#dashboardContent -->
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const MEMBER = {{ member_number | tojson }};
+
+// ── Chart.js global defaults ──────────────────────────────────────────
+Chart.defaults.color = getComputedStyle(document.documentElement)
+  .getPropertyValue('--text-muted').trim() || '#64748b';
+Chart.defaults.borderColor = getComputedStyle(document.documentElement)
+  .getPropertyValue('--chart-grid').trim() || 'rgba(148,163,184,0.08)';
+Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
+Chart.defaults.font.size = 12;
+
+// ── Global state ─────────────────────────────────────────────────────
+let _data = null;
+let _rollingWindow = 0;
+let _charts = {};
+
+// ── Helpers ───────────────────────────────────────────────────────────
+function classToColor(cls) {
+  const map = { GM: '#eab308', M: '#ef4444', A: '#a855f7', B: '#3b82f6', C: '#22c55e', D: '#6b7280', U: '#94a3b8' };
+  return map[(cls || '').toUpperCase()] || '#94a3b8';
+}
+function classBadge(cls) {
+  const c = (cls || '').toUpperCase();
+  return `<span class="badge badge-${c.toLowerCase()}">${c || '?'}</span>`;
+}
+function fmtPct(v) { return v != null ? v.toFixed(2) + '%' : '—'; }
+function fmtHF(v)  { return v != null ? v.toFixed(4) : '—'; }
+
+// Chart color palette
+const PALETTE = ['#6366f1','#22c55e','#f59e0b','#ef4444','#a855f7','#06b6d4','#f97316','#84cc16'];
+
+function themeColors() {
+  const style = getComputedStyle(document.documentElement);
+  return {
+    grid:    style.getPropertyValue('--chart-grid').trim(),
+    text:    style.getPropertyValue('--text-muted').trim(),
+    bg:      style.getPropertyValue('--bg-card').trim(),
+  };
+}
+
+function destroyChart(id) {
+  if (_charts[id]) { _charts[id].destroy(); delete _charts[id]; }
+}
+
+// Rolling average helper
+function rollingAvg(arr, window) {
+  if (window <= 0) return arr;
+  return arr.map((_, i) => {
+    const slice = arr.slice(Math.max(0, i - window + 1), i + 1).filter(v => v != null);
+    return slice.length ? slice.reduce((a, b) => a + b, 0) / slice.length : null;
+  });
+}
+
+// ── Load dashboard data ───────────────────────────────────────────────
+async function loadDashboard() {
+  show('pageLoading'); hide('pageError'); hide('dashboardContent');
+
+  try {
+    const resp = await fetch(`/api/member/${MEMBER}/dashboard`);
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${resp.status}`);
+    }
+    _data = await resp.json();
+    renderAll();
+    hide('pageLoading');
+    show('dashboardContent');
+  } catch (err) {
+    hide('pageLoading');
+    document.getElementById('pageErrorMsg').textContent = err.message || 'Failed to load dashboard data.';
+    show('pageError');
+  }
+}
+
+async function refreshData() {
+  try {
+    await fetch(`/api/analyze/${MEMBER}`, { method: 'POST' });
+  } catch (_) {}
+  _data = null;
+  loadDashboard();
+}
+
+function show(id) { document.getElementById(id).style.display = ''; }
+function hide(id) { document.getElementById(id).style.display = 'none'; }
+
+// ── Render all sections ───────────────────────────────────────────────
+function renderAll() {
+  renderOverview();
+  renderClassTable();
+  populateDivisionFilters();
+  updateTimeSeriesChart();
+  updateHFChart();
+  renderDivisionCharts();
+  renderClassifierBreakdown();
+  renderStats();
+}
+
+// ── 1. Overview ───────────────────────────────────────────────────────
+function renderOverview() {
+  const ov = _data.overview;
+  const clsf = _data.classifier_breakdown || [];
+  const divs = Object.keys(_data.time_series || {});
+
+  // Most active division by count
+  const divCount = {};
+  clsf.forEach(c => { divCount[c.division] = (divCount[c.division] || 0) + 1; });
+  const mostActive = Object.entries(divCount).sort((a,b) => b[1]-a[1])[0];
+
+  const totalMatches = (_data.match_stats || []).length;
+
+  const cards = [
+    { label: 'Member',           value: ov.member_number },
+    { label: 'Total Classifiers',value: clsf.length },
+    { label: 'Total Matches',    value: totalMatches },
+    { label: 'Avg % (All)',      value: fmtPct(avgAll()) },
+    { label: 'Most Active Div',  value: mostActive ? mostActive[0] : '—' },
+  ];
+
+  document.getElementById('overviewStats').innerHTML = cards.map(c => `
+    <div class="stat-card">
+      <div class="stat-label">${c.label}</div>
+      <div class="stat-value" style="font-size:1.25rem;">${c.value}</div>
+    </div>
+  `).join('');
+
+  if (ov.last_scraped_at) {
+    document.getElementById('lastScraped').textContent =
+      'Last scraped: ' + new Date(ov.last_scraped_at).toLocaleString();
+  } else {
+    document.getElementById('lastScraped').textContent = '';
+  }
+}
+
+function avgAll() {
+  const clsf = _data.classifier_breakdown || [];
+  const pcts = clsf.map(c => c.percentage).filter(v => v != null);
+  return pcts.length ? pcts.reduce((a,b)=>a+b,0)/pcts.length : null;
+}
+
+// ── 2. Classification Table ───────────────────────────────────────────
+function renderClassTable() {
+  const divStats = _data.division_stats || {};
+  const rows = Object.entries(divStats).map(([div, info]) => {
+    const pct = info.percentage;
+    const fill = pct != null ? Math.min(100, pct) : 0;
+    return `<tr>
+      <td>${div}</td>
+      <td>${classBadge(info.class)}</td>
+      <td>${fmtPct(pct)}</td>
+      <td>
+        <div class="pct-bar">
+          <div class="pct-track"><div class="pct-fill" style="width:${fill}%;background:${classToColor(info.class)};"></div></div>
+          <span style="min-width:2.5rem;font-size:0.75rem;color:var(--text-muted)">${fmtPct(pct)}</span>
+        </div>
+      </td>
+    </tr>`;
+  });
+  document.getElementById('classTableBody').innerHTML = rows.join('') || '<tr><td colspan="4" class="text-muted">No classification data</td></tr>';
+}
+
+// ── Division filter helpers ───────────────────────────────────────────
+function populateDivisionFilters() {
+  const divisions = Object.keys(_data.time_series || {});
+  ['divisionFilter','hfDivisionFilter'].forEach(id => {
+    const sel = document.getElementById(id);
+    sel.innerHTML = divisions.map(d => `<option value="${d}">${d}</option>`).join('');
+  });
+}
+
+// ── 3. Time Series Chart ─────────────────────────────────────────────
+function updateTimeSeriesChart() {
+  const div = document.getElementById('divisionFilter').value;
+  const rawData = (_data.time_series || {})[div] || [];
+  const dateFrom = document.getElementById('dateFrom').value;
+  const dateTo   = document.getElementById('dateTo').value;
+
+  let filtered = rawData
+    .filter(d => d.date && d.percentage != null)
+    .sort((a,b) => a.date.localeCompare(b.date));
+
+  if (dateFrom) filtered = filtered.filter(d => d.date >= dateFrom);
+  if (dateTo)   filtered = filtered.filter(d => d.date <= dateTo);
+
+  const labels = filtered.map(d => d.date);
+  const raw    = filtered.map(d => d.percentage);
+  const rolled = rollingAvg(raw, _rollingWindow);
+
+  const tc = themeColors();
+  destroyChart('timeSeries');
+
+  const datasets = [
+    {
+      label: 'Raw %',
+      data: raw,
+      borderColor: PALETTE[0],
+      backgroundColor: 'rgba(99,102,241,0.08)',
+      pointRadius: 3,
+      tension: 0.3,
+      fill: true,
+    }
+  ];
+
+  if (_rollingWindow > 0) {
+    datasets.push({
+      label: `Rolling ${_rollingWindow}`,
+      data: rolled,
+      borderColor: '#f59e0b',
+      borderWidth: 2,
+      pointRadius: 0,
+      tension: 0.4,
+    });
+  }
+
+  _charts['timeSeries'] = new Chart(
+    document.getElementById('timeSeriesChart').getContext('2d'),
+    {
+      type: 'line',
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        plugins: { legend: { display: _rollingWindow > 0 } },
+        scales: {
+          x: { type: 'time', time: { unit: 'month' }, grid: { color: tc.grid } },
+          y: {
+            min: 0, max: 110,
+            grid: { color: tc.grid },
+            ticks: { callback: v => v + '%' }
+          }
+        }
+      }
+    }
+  );
+}
+
+function setRolling(btn, w) {
+  _rollingWindow = w;
+  document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  updateTimeSeriesChart();
+}
+
+// ── 4. Hit Factor Chart ───────────────────────────────────────────────
+function updateHFChart() {
+  const div = document.getElementById('hfDivisionFilter').value;
+  const rawData = (_data.time_series || {})[div] || [];
+
+  const filtered = rawData
+    .filter(d => d.date && d.hit_factor != null)
+    .sort((a,b) => a.date.localeCompare(b.date));
+
+  const labels = filtered.map(d => d.date);
+  const hfs    = filtered.map(d => d.hit_factor);
+  const maxHF  = Math.max(...hfs.filter(v => v != null));
+
+  const pointColors = hfs.map(v => v === maxHF ? '#f59e0b' : PALETTE[1]);
+
+  const tc = themeColors();
+  destroyChart('hf');
+
+  _charts['hf'] = new Chart(
+    document.getElementById('hfChart').getContext('2d'),
+    {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Hit Factor',
+          data: hfs,
+          borderColor: PALETTE[1],
+          pointBackgroundColor: pointColors,
+          pointRadius: 4,
+          tension: 0.3,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { type: 'time', time: { unit: 'month' }, grid: { color: tc.grid } },
+          y: { grid: { color: tc.grid } }
+        }
+      }
+    }
+  );
+}
+
+// ── 5. Division Analytics ─────────────────────────────────────────────
+function renderDivisionCharts() {
+  const divStats = _data.division_stats || {};
+  const labels   = Object.keys(divStats);
+  const pcts     = labels.map(d => divStats[d].percentage);
+  const colors   = labels.map(d => classToColor(divStats[d].class));
+
+  const tc = themeColors();
+
+  // Bar chart
+  destroyChart('divBar');
+  _charts['divBar'] = new Chart(
+    document.getElementById('divBarChart').getContext('2d'),
+    {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{ label: 'Avg %', data: pcts, backgroundColor: colors }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { min: 0, max: 110, grid: { color: tc.grid }, ticks: { callback: v => v + '%' } },
+          x: { grid: { display: false } }
+        }
+      }
+    }
+  );
+
+  // Radar chart
+  destroyChart('divRadar');
+  _charts['divRadar'] = new Chart(
+    document.getElementById('divRadarChart').getContext('2d'),
+    {
+      type: 'radar',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Classification %',
+          data: pcts,
+          borderColor: PALETTE[0],
+          backgroundColor: 'rgba(99,102,241,0.15)',
+          pointBackgroundColor: PALETTE[0],
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: {
+          r: {
+            min: 0, max: 100,
+            grid: { color: tc.grid },
+            ticks: { callback: v => v + '%', backdropColor: 'transparent' }
+          }
+        }
+      }
+    }
+  );
+}
+
+// ── 6. Classifier Breakdown ───────────────────────────────────────────
+function renderClassifierBreakdown() {
+  const clsf = (_data.classifier_breakdown || []).filter(c => c.percentage != null);
+  const sorted = [...clsf].sort((a,b) => b.percentage - a.percentage);
+  const top10  = sorted.slice(0, 10);
+  const bot10  = sorted.slice(-10).reverse();
+
+  function row(c, i, isTop) {
+    const pctClass = isTop ? 'pct-up' : 'pct-down';
+    return `<tr>
+      <td class="num-rank">${i+1}</td>
+      <td>${c.classifier_number}${c.classifier_name ? '<br><span class="text-muted" style="font-size:0.7rem;">' + c.classifier_name + '</span>' : ''}</td>
+      <td>${c.division}</td>
+      <td class="${pctClass}">${fmtPct(c.percentage)}</td>
+    </tr>`;
+  }
+
+  document.getElementById('top10Body').innerHTML = top10.map((c,i) => row(c,i,true)).join('') || '<tr><td colspan="4" class="text-muted">No data</td></tr>';
+  document.getElementById('bottom10Body').innerHTML = bot10.map((c,i) => row(c,i,false)).join('') || '<tr><td colspan="4" class="text-muted">No data</td></tr>';
+
+  // Frequency chart — top 15 most-shot classifiers
+  const freq = {};
+  (_data.classifier_breakdown || []).forEach(c => {
+    freq[c.classifier_number] = (freq[c.classifier_number] || 0) + 1;
+  });
+  const freqSorted = Object.entries(freq).sort((a,b) => b[1]-a[1]).slice(0, 15);
+
+  const tc = themeColors();
+  destroyChart('freq');
+  _charts['freq'] = new Chart(
+    document.getElementById('freqChart').getContext('2d'),
+    {
+      type: 'bar',
+      data: {
+        labels: freqSorted.map(([k]) => k),
+        datasets: [{ label: 'Times Shot', data: freqSorted.map(([,v]) => v), backgroundColor: PALETTE[3] }]
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { grid: { color: tc.grid }, ticks: { stepSize: 1 } },
+          y: { grid: { display: false } }
+        }
+      }
+    }
+  );
+}
+
+// ── 7. Statistical Summary ────────────────────────────────────────────
+function renderStats() {
+  const clsf = (_data.classifier_breakdown || []).filter(c => c.percentage != null).map(c => c.percentage);
+
+  if (!clsf.length) {
+    document.getElementById('statsGrid').innerHTML = '<p class="text-muted">No classifier data available.</p>';
+    return;
+  }
+
+  clsf.sort((a,b) => a-b);
+  const mean   = clsf.reduce((a,b)=>a+b,0) / clsf.length;
+  const median = clsf.length % 2 === 0
+    ? (clsf[clsf.length/2-1] + clsf[clsf.length/2]) / 2
+    : clsf[Math.floor(clsf.length/2)];
+  const std = Math.sqrt(clsf.map(v=>(v-mean)**2).reduce((a,b)=>a+b,0) / clsf.length);
+  const volatility = mean ? (std / mean * 100) : 0;
+
+  // Trend slope (simple linear regression)
+  let slope = null;
+  const n = clsf.length;
+  if (n >= 2) {
+    const sx = n*(n-1)/2, sx2 = (n-1)*n*(2*n-1)/6;
+    const sy = clsf.reduce((a,b)=>a+b,0);
+    const sxy = clsf.reduce((a,v,i)=>a+i*v,0);
+    slope = (n*sxy - sx*sy) / (n*sx2 - sx*sx);
+  }
+
+  // YoY: last 50% vs prior 50%
+  const half = Math.floor(clsf.length / 2);
+  let yoy = null;
+  if (half > 0) {
+    const recent = clsf.slice(-half);
+    const prior  = clsf.slice(0, half);
+    yoy = recent.reduce((a,b)=>a+b,0)/recent.length - prior.reduce((a,b)=>a+b,0)/prior.length;
+  }
+
+  const stats = [
+    { label: 'Mean %',      value: fmtPct(mean),     sub: 'Average across all classifiers' },
+    { label: 'Median %',    value: fmtPct(median),   sub: '50th percentile' },
+    { label: 'Std Dev',     value: std.toFixed(2),   sub: 'Consistency measure' },
+    { label: 'Volatility',  value: volatility.toFixed(1) + '%', sub: '(std/mean × 100)' },
+    { label: 'Trend Slope', value: slope != null ? slope.toFixed(4) : '—', sub: 'Per-shot improvement rate' },
+    { label: 'YoY Est.',    value: yoy != null ? (yoy >= 0 ? '+' : '') + yoy.toFixed(2) + '%' : '—', sub: 'Recent vs prior half' },
+  ];
+
+  document.getElementById('statsGrid').innerHTML = stats.map(s => `
+    <div class="stat-card">
+      <div class="stat-label">${s.label}</div>
+      <div class="stat-value" style="font-size:1.5rem;">${s.value}</div>
+      <div class="stat-sub">${s.sub}</div>
+    </div>
+  `).join('');
+}
+
+// ── Theme change listener — re-render charts ──────────────────────────
+document.getElementById('themeToggle').addEventListener('click', () => {
+  // Brief delay to let CSS vars update
+  setTimeout(() => {
+    if (!_data) return;
+    updateTimeSeriesChart();
+    updateHFChart();
+    renderDivisionCharts();
+    renderClassifierBreakdown();
+  }, 50);
+});
+
+// ── Init ──────────────────────────────────────────────────────────────
+loadDashboard();
+</script>
+{% endblock %}

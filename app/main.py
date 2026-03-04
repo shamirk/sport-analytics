@@ -15,7 +15,7 @@ from app.exceptions import (
 )
 from app.limiter import limiter
 from app.logging_config import configure_logging
-from app.routes import health, members
+from app.routes import health, members, pages
 
 configure_logging()
 log = structlog.get_logger()
@@ -114,5 +114,6 @@ async def generic_error_handler(request: Request, exc: Exception):
 # Routes
 # ---------------------------------------------------------------------------
 
+app.include_router(pages.router)
 app.include_router(health.router)
 app.include_router(members.router)
