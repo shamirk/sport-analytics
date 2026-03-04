@@ -3,22 +3,26 @@ import time
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
-from app.database import engine
 from app.exceptions import (
     MemberNotFoundError,
     RateLimitError,
     ScrapingError,
     ValidationError,
 )
+from app.limiter import limiter
 from app.logging_config import configure_logging
+from app.routes import health, members
 
 configure_logging()
 log = structlog.get_logger()
 
 app = FastAPI(title="USPSA Analytics", version="0.1.0")
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ---------------------------------------------------------------------------
 # Middleware
@@ -95,24 +99,5 @@ async def generic_error_handler(request: Request, exc: Exception):
 # Routes
 # ---------------------------------------------------------------------------
 
-
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
-
-
-@app.get("/health/ready")
-async def health_ready():
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        db_status = "ok"
-    except Exception as exc:
-        log.error("health.db_check_failed", detail=str(exc))
-        db_status = "unavailable"
-
-    ready = db_status == "ok"
-    return JSONResponse(
-        status_code=200 if ready else 503,
-        content={"status": "ready" if ready else "not_ready", "db": db_status},
-    )
+app.include_router(health.router)
+app.include_router(members.router)
