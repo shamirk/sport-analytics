@@ -2,6 +2,7 @@ import time
 
 import structlog
 from fastapi import FastAPI, Request
+from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -48,6 +49,20 @@ async def logging_middleware(request: Request, call_next):
 # ---------------------------------------------------------------------------
 # Exception handlers
 # ---------------------------------------------------------------------------
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Return structured error responses: {error, detail, code}."""
+    if isinstance(exc.detail, dict) and "error" in exc.detail:
+        content = exc.detail
+    else:
+        content = {
+            "error": "HTTP Error",
+            "detail": str(exc.detail),
+            "code": exc.status_code,
+        }
+    return JSONResponse(status_code=exc.status_code, content=content)
 
 
 @app.exception_handler(MemberNotFoundError)
