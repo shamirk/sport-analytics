@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from app.database import SessionLocal, engine
+from app.database import engine
 from app.exceptions import (
     MemberNotFoundError,
     RateLimitError,
