@@ -36,7 +36,7 @@
 .chart-wrap { position: relative; width: 100%; }
 .chart-wrap canvas { max-height: 320px; }
 .chart-wrap-tall canvas { max-height: 400px; }
-.chart-wrap-sm canvas { max-height: 240px; }
+.chart-wrap-sm canvas { max-height: 220px; }
 
 /* Filter bar */
 .filter-bar {
@@ -49,7 +49,7 @@
 .filter-bar select, .filter-bar input { padding: 0.4rem 0.75rem; font-size: 0.8rem; }
 .filter-bar label { font-size: 0.8rem; color: var(--text-muted); }
 
-/* Rolling toggles */
+/* Toggle groups */
 .toggle-group { display: flex; gap: 0.375rem; }
 .toggle-btn {
   padding: 0.3rem 0.75rem;
@@ -68,28 +68,27 @@
   color: #fff;
 }
 
-/* Classification table */
-.class-table td:first-child { color: var(--text-primary); font-weight: 600; }
-.pct-bar {
+/* Global division filter */
+.global-filter {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
-.pct-track {
-  flex: 1;
-  height: 6px;
-  background: var(--border);
-  border-radius: 3px;
-  overflow: hidden;
+.global-filter label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
 }
-.pct-fill {
-  height: 100%;
-  border-radius: 3px;
-  background: var(--accent);
+.global-filter select {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 600;
 }
-
-/* Sparkline placeholder */
-.sparkline { display: inline-block; width: 80px; height: 28px; }
 
 /* Top/Bottom table */
 .num-rank { color: var(--text-muted); font-size: 0.75rem; min-width: 1.5rem; }
@@ -132,42 +131,45 @@
 
 <div id="dashboardContent" style="display:none;">
 
-  <!-- ── 1. Overview Panel ───────────────────────────────────────────── -->
+  <!-- ── 1. Avg % per Division (top of dashboard) ───────────────────── -->
+  <section class="card mb-2">
+    <div class="card-title">Avg % per Division</div>
+    <div class="chart-wrap chart-wrap-sm">
+      <canvas id="divBarChart"></canvas>
+    </div>
+  </section>
+
+  <!-- ── 2. Global Division Filter ─────────────────────────────────── -->
+  <div class="global-filter mb-2">
+    <label>Division</label>
+    <select id="globalDivisionFilter" onchange="onDivisionChange()"></select>
+  </div>
+
+  <!-- ── 3. Overview Panel ───────────────────────────────────────────── -->
   <section>
     <div class="grid grid-5 mb-2" id="overviewStats">
       <!-- Filled by JS -->
     </div>
-    <!-- Classification table -->
-    <div class="card mb-2">
-      <div class="card-title">Current Classifications</div>
-      <table class="class-table" id="classTable">
-        <thead>
-          <tr>
-            <th>Division</th>
-            <th>Class</th>
-            <th>Percentage</th>
-            <th style="min-width:180px;">Progress</th>
-          </tr>
-        </thead>
-        <tbody id="classTableBody"></tbody>
-      </table>
-    </div>
   </section>
 
-  <!-- ── 2. Classifier % Over Time ──────────────────────────────────── -->
+  <!-- ── 4. Classifier % Over Time ──────────────────────────────────── -->
   <section class="card mb-2">
     <div class="section-header">
       <div class="section-title">Classifier % Over Time</div>
     </div>
     <div class="filter-bar">
-      <label>Division</label>
-      <select id="divisionFilter" onchange="updateTimeSeriesChart()"></select>
-      <label>Rolling avg</label>
-      <div class="toggle-group" id="rollingToggles">
-        <button class="toggle-btn active" data-window="0" onclick="setRolling(this, 0)">None</button>
-        <button class="toggle-btn" data-window="5"  onclick="setRolling(this, 5)">5</button>
-        <button class="toggle-btn" data-window="10" onclick="setRolling(this, 10)">10</button>
-        <button class="toggle-btn" data-window="20" onclick="setRolling(this, 20)">20</button>
+      <label>View</label>
+      <div class="toggle-group" id="tsViewToggles">
+        <button class="toggle-btn active" onclick="setTsView(this,'match')">Match View</button>
+        <button class="toggle-btn" onclick="setTsView(this,'classifier')">Classifier View</button>
+      </div>
+      <label>Trend</label>
+      <div class="toggle-group" id="tsTrendToggles">
+        <button class="toggle-btn active" onclick="setTsTrend(this,0)">None</button>
+        <button class="toggle-btn" onclick="setTsTrend(this,5)">Last 5</button>
+        <button class="toggle-btn" onclick="setTsTrend(this,10)">Last 10</button>
+        <button class="toggle-btn" onclick="setTsTrend(this,15)">Last 15</button>
+        <button class="toggle-btn" onclick="setTsTrend(this,20)">Last 20</button>
       </div>
       <label>From</label>
       <input type="date" id="dateFrom" onchange="updateTimeSeriesChart()" />
@@ -179,37 +181,32 @@
     </div>
   </section>
 
-  <!-- ── 3. Hit Factor Trend ─────────────────────────────────────────── -->
+  <!-- ── 5. Hit Factor Trend ─────────────────────────────────────────── -->
   <section class="card mb-2">
     <div class="section-header">
       <div class="section-title">Hit Factor Trend</div>
     </div>
     <div class="filter-bar">
-      <label>Division</label>
-      <select id="hfDivisionFilter" onchange="updateHFChart()"></select>
+      <label>View</label>
+      <div class="toggle-group" id="hfViewToggles">
+        <button class="toggle-btn active" onclick="setHfView(this,'match')">Match View</button>
+        <button class="toggle-btn" onclick="setHfView(this,'classifier')">Classifier View</button>
+      </div>
+      <label>Trend</label>
+      <div class="toggle-group" id="hfTrendToggles">
+        <button class="toggle-btn active" onclick="setHfTrend(this,0)">None</button>
+        <button class="toggle-btn" onclick="setHfTrend(this,5)">Last 5</button>
+        <button class="toggle-btn" onclick="setHfTrend(this,10)">Last 10</button>
+        <button class="toggle-btn" onclick="setHfTrend(this,15)">Last 15</button>
+        <button class="toggle-btn" onclick="setHfTrend(this,20)">Last 20</button>
+      </div>
     </div>
     <div class="chart-wrap chart-wrap-tall">
       <canvas id="hfChart"></canvas>
     </div>
   </section>
 
-  <!-- ── 4. Division Analytics ──────────────────────────────────────── -->
-  <div class="grid grid-2 mb-2">
-    <section class="card">
-      <div class="card-title">Avg % per Division</div>
-      <div class="chart-wrap">
-        <canvas id="divBarChart"></canvas>
-      </div>
-    </section>
-    <section class="card">
-      <div class="card-title">Division Radar</div>
-      <div class="chart-wrap">
-        <canvas id="divRadarChart"></canvas>
-      </div>
-    </section>
-  </div>
-
-  <!-- ── 5. Classifier Breakdown ────────────────────────────────────── -->
+  <!-- ── 6. Classifier Breakdown ────────────────────────────────────── -->
   <div class="grid grid-2 mb-2">
     <section class="card">
       <div class="section-header">
@@ -239,7 +236,7 @@
     </div>
   </section>
 
-  <!-- ── 6. Statistical Summary ─────────────────────────────────────── -->
+  <!-- ── 7. Statistical Summary ─────────────────────────────────────── -->
   <section class="card mb-2">
     <div class="card-title">Statistical Summary</div>
     <div class="grid grid-3" id="statsGrid"></div>
@@ -260,10 +257,50 @@ Chart.defaults.borderColor = getComputedStyle(document.documentElement)
 Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
 Chart.defaults.font.size = 12;
 
+// ── Custom datalabels plugin for div bar chart ────────────────────────
+const divBarLabelPlugin = {
+  id: 'divBarLabels',
+  afterDraw(chart) {
+    if (chart.canvas.id !== 'divBarChart') return;
+    const { ctx, data } = chart;
+    const dataset = data.datasets[0];
+    if (!dataset || !dataset._labels) return;
+    const meta = chart.getDatasetMeta(0);
+    ctx.save();
+    ctx.font = 'bold 11px -apple-system, BlinkMacSystemFont, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    meta.data.forEach((bar, i) => {
+      const lbl = dataset._labels[i];
+      if (!lbl) return;
+      const x = bar.x;
+      const y = bar.y - 4;
+      ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+      ctx.lineWidth = 3;
+      ctx.lineJoin = 'round';
+      ctx.strokeText(lbl, x, y);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(lbl, x, y);
+    });
+    ctx.restore();
+  }
+};
+Chart.register(divBarLabelPlugin);
+
 // ── Global state ─────────────────────────────────────────────────────
 let _data = null;
-let _rollingWindow = 0;
 let _charts = {};
+let _globalDivision = null;
+let _tsView = 'match';
+let _hfView = 'match';
+let _tsTrend = 0;
+let _hfTrend = 0;
+
+// ── Constants ─────────────────────────────────────────────────────────
+const ALL_DIVISIONS = [
+  'Open', 'Limited', 'Limited 10', 'Production',
+  'Revolver', 'Single Stack', 'Carry Optics', 'PCC', 'Limited Optics'
+];
 
 // ── Helpers ───────────────────────────────────────────────────────────
 function classToColor(cls) {
@@ -276,16 +313,16 @@ function classBadge(cls) {
 }
 function fmtPct(v) { return v != null ? v.toFixed(2) + '%' : '—'; }
 function fmtHF(v)  { return v != null ? v.toFixed(4) : '—'; }
+function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + '…' : (s || ''); }
 
-// Chart color palette
 const PALETTE = ['#6366f1','#22c55e','#f59e0b','#ef4444','#a855f7','#06b6d4','#f97316','#84cc16'];
 
 function themeColors() {
   const style = getComputedStyle(document.documentElement);
   return {
-    grid:    style.getPropertyValue('--chart-grid').trim(),
-    text:    style.getPropertyValue('--text-muted').trim(),
-    bg:      style.getPropertyValue('--bg-card').trim(),
+    grid: style.getPropertyValue('--chart-grid').trim(),
+    text: style.getPropertyValue('--text-muted').trim(),
+    bg:   style.getPropertyValue('--bg-card').trim(),
   };
 }
 
@@ -293,19 +330,61 @@ function destroyChart(id) {
   if (_charts[id]) { _charts[id].destroy(); delete _charts[id]; }
 }
 
-// Rolling average helper
-function rollingAvg(arr, window) {
-  if (window <= 0) return arr;
-  return arr.map((_, i) => {
-    const slice = arr.slice(Math.max(0, i - window + 1), i + 1).filter(v => v != null);
-    return slice.length ? slice.reduce((a, b) => a + b, 0) / slice.length : null;
+// ── Trend line: least-squares regression on last N points ─────────────
+// Returns full-length array projecting the regression line across all x positions.
+function computeTrendLine(yValues, windowSize) {
+  if (!windowSize || windowSize <= 0 || yValues.length < 2) return null;
+  const n = Math.min(windowSize, yValues.length);
+  const startIdx = yValues.length - n;
+  const pts = [];
+  for (let i = 0; i < n; i++) {
+    const v = yValues[startIdx + i];
+    if (v != null) pts.push({ xi: i, y: v });
+  }
+  if (pts.length < 2) return null;
+  const N = pts.length;
+  const sx  = pts.reduce((a, p) => a + p.xi, 0);
+  const sy  = pts.reduce((a, p) => a + p.y, 0);
+  const sxy = pts.reduce((a, p) => a + p.xi * p.y, 0);
+  const sx2 = pts.reduce((a, p) => a + p.xi * p.xi, 0);
+  const denom = N * sx2 - sx * sx;
+  if (Math.abs(denom) < 1e-10) return null;
+  const m = (N * sxy - sx * sy) / denom;
+  const b = (sy - m * sx) / N;
+  // Project line across all x positions (local index = global_i - startIdx)
+  return yValues.map((_, i) => m * (i - startIdx) + b);
+}
+
+// ── Match grouping: group classifier_breakdown by date+match ──────────
+function groupByMatch(division) {
+  const clsf = (_data.classifier_breakdown || []).filter(c => c.division === division);
+  const groups = {};
+  clsf.forEach(c => {
+    const key = `${c.match_date}||${c.match_name}`;
+    if (!groups[key]) {
+      groups[key] = { match_name: c.match_name, match_date: c.match_date, pcts: [], hfs: [] };
+    }
+    if (c.percentage != null) groups[key].pcts.push(c.percentage);
+    if (c.hit_factor != null) groups[key].hfs.push(c.hit_factor);
   });
+  const avg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+  return Object.values(groups)
+    .sort((a, b) => a.match_date.localeCompare(b.match_date))
+    .map(g => ({ ...g, avgPct: avg(g.pcts), avgHF: avg(g.hfs), count: g.pcts.length }));
+}
+
+// ── Default division: most classifier scores ──────────────────────────
+function getDefaultDivision() {
+  const clsf = _data.classifier_breakdown || [];
+  const divCount = {};
+  clsf.forEach(c => { divCount[c.division] = (divCount[c.division] || 0) + 1; });
+  const top = Object.entries(divCount).sort((a, b) => b[1] - a[1])[0];
+  return top ? top[0] : (Object.keys(_data.time_series || {})[0] || ALL_DIVISIONS[0]);
 }
 
 // ── Load dashboard data ───────────────────────────────────────────────
 async function loadDashboard() {
   show('pageLoading'); hide('pageError'); hide('dashboardContent');
-
   try {
     const resp = await fetch(`/api/member/${MEMBER}/dashboard`);
     if (!resp.ok) {
@@ -313,6 +392,7 @@ async function loadDashboard() {
       throw new Error(err.detail || `HTTP ${resp.status}`);
     }
     _data = await resp.json();
+    _globalDivision = getDefaultDivision();
     renderAll();
     hide('pageLoading');
     show('dashboardContent');
@@ -324,9 +404,7 @@ async function loadDashboard() {
 }
 
 async function refreshData() {
-  try {
-    await fetch(`/api/analyze/${MEMBER}`, { method: 'POST' });
-  } catch (_) {}
+  try { await fetch(`/api/analyze/${MEMBER}`, { method: 'POST' }); } catch (_) {}
   _data = null;
   loadDashboard();
 }
@@ -336,34 +414,101 @@ function hide(id) { document.getElementById(id).style.display = 'none'; }
 
 // ── Render all sections ───────────────────────────────────────────────
 function renderAll() {
+  renderDivBarChart();
+  populateGlobalDivFilter();
   renderOverview();
-  renderClassTable();
-  populateDivisionFilters();
   updateTimeSeriesChart();
   updateHFChart();
-  renderDivisionCharts();
   renderClassifierBreakdown();
   renderStats();
 }
 
-// ── 1. Overview ───────────────────────────────────────────────────────
-function renderOverview() {
-  const ov = _data.overview;
-  const clsf = _data.classifier_breakdown || [];
-  const divs = Object.keys(_data.time_series || {});
+// ── 1. Avg % per Division bar chart (top) ─────────────────────────────
+function renderDivBarChart() {
+  const divStats = _data.division_stats || {};
+  const labels = ALL_DIVISIONS;
+  const pcts   = labels.map(d => {
+    const info = divStats[d];
+    return info && info.percentage != null ? info.percentage : 0;
+  });
+  const colors = labels.map(d => {
+    const info = divStats[d];
+    return classToColor(info ? info.class : 'U');
+  });
+  const dataLabels = labels.map(d => {
+    const info = divStats[d];
+    const pct = info && info.percentage != null ? info.percentage : 0;
+    const cls = info ? (info.class || 'U').toUpperCase() : 'U';
+    return `${pct.toFixed(2)}%(${cls})`;
+  });
 
-  // Most active division by count
+  const tc = themeColors();
+  destroyChart('divBar');
+
+  const ds = {
+    label: 'Avg %',
+    data: pcts,
+    backgroundColor: colors,
+    _labels: dataLabels,
+  };
+
+  _charts['divBar'] = new Chart(
+    document.getElementById('divBarChart').getContext('2d'),
+    {
+      type: 'bar',
+      data: { labels, datasets: [ds] },
+      options: {
+        responsive: true,
+        layout: { padding: { top: 24 } },
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { min: 0, max: 110, grid: { color: tc.grid }, ticks: { callback: v => v + '%' } },
+          x: { grid: { display: false } }
+        }
+      }
+    }
+  );
+}
+
+// ── 2. Global division filter ─────────────────────────────────────────
+function populateGlobalDivFilter() {
+  const divisions = Object.keys(_data.time_series || {});
+  // Include any divisions from classifier_breakdown not in time_series
+  const clsfDivs = [...new Set((_data.classifier_breakdown || []).map(c => c.division))];
+  const allDivs  = [...new Set([...divisions, ...clsfDivs])];
+
+  const sel = document.getElementById('globalDivisionFilter');
+  sel.innerHTML = allDivs.map(d =>
+    `<option value="${d}"${d === _globalDivision ? ' selected' : ''}>${d}</option>`
+  ).join('');
+}
+
+function onDivisionChange() {
+  _globalDivision = document.getElementById('globalDivisionFilter').value;
+  updateTimeSeriesChart();
+  updateHFChart();
+  renderClassifierBreakdown();
+  renderStats();
+}
+
+// ── 3. Overview ───────────────────────────────────────────────────────
+function renderOverview() {
+  const ov   = _data.overview;
+  const clsf = _data.classifier_breakdown || [];
+
   const divCount = {};
   clsf.forEach(c => { divCount[c.division] = (divCount[c.division] || 0) + 1; });
-  const mostActive = Object.entries(divCount).sort((a,b) => b[1]-a[1])[0];
+  const mostActive = Object.entries(divCount).sort((a, b) => b[1] - a[1])[0];
 
   const totalMatches = (_data.match_stats || []).length;
+  const pcts = clsf.map(c => c.percentage).filter(v => v != null);
+  const avgPct = pcts.length ? pcts.reduce((a, b) => a + b, 0) / pcts.length : null;
 
   const cards = [
     { label: 'Member',           value: ov.member_number },
     { label: 'Total Classifiers',value: clsf.length },
     { label: 'Total Matches',    value: totalMatches },
-    { label: 'Avg % (All)',      value: fmtPct(avgAll()) },
+    { label: 'Avg % (All)',      value: fmtPct(avgPct) },
     { label: 'Most Active Div',  value: mostActive ? mostActive[0] : '—' },
   ];
 
@@ -382,226 +527,317 @@ function renderOverview() {
   }
 }
 
-function avgAll() {
-  const clsf = _data.classifier_breakdown || [];
-  const pcts = clsf.map(c => c.percentage).filter(v => v != null);
-  return pcts.length ? pcts.reduce((a,b)=>a+b,0)/pcts.length : null;
-}
-
-// ── 2. Classification Table ───────────────────────────────────────────
-function renderClassTable() {
-  const divStats = _data.division_stats || {};
-  const rows = Object.entries(divStats).map(([div, info]) => {
-    const pct = info.percentage;
-    const fill = pct != null ? Math.min(100, pct) : 0;
-    return `<tr>
-      <td>${div}</td>
-      <td>${classBadge(info.class)}</td>
-      <td>${fmtPct(pct)}</td>
-      <td>
-        <div class="pct-bar">
-          <div class="pct-track"><div class="pct-fill" style="width:${fill}%;background:${classToColor(info.class)};"></div></div>
-          <span style="min-width:2.5rem;font-size:0.75rem;color:var(--text-muted)">${fmtPct(pct)}</span>
-        </div>
-      </td>
-    </tr>`;
-  });
-  document.getElementById('classTableBody').innerHTML = rows.join('') || '<tr><td colspan="4" class="text-muted">No classification data</td></tr>';
-}
-
-// ── Division filter helpers ───────────────────────────────────────────
-function populateDivisionFilters() {
-  const divisions = Object.keys(_data.time_series || {});
-  ['divisionFilter','hfDivisionFilter'].forEach(id => {
-    const sel = document.getElementById(id);
-    sel.innerHTML = divisions.map(d => `<option value="${d}">${d}</option>`).join('');
-  });
-}
-
-// ── 3. Time Series Chart ─────────────────────────────────────────────
+// ── 4. Time Series Chart ─────────────────────────────────────────────
 function updateTimeSeriesChart() {
-  const div = document.getElementById('divisionFilter').value;
-  const rawData = (_data.time_series || {})[div] || [];
   const dateFrom = document.getElementById('dateFrom').value;
   const dateTo   = document.getElementById('dateTo').value;
-
-  let filtered = rawData
-    .filter(d => d.date && d.percentage != null)
-    .sort((a,b) => a.date.localeCompare(b.date));
-
-  if (dateFrom) filtered = filtered.filter(d => d.date >= dateFrom);
-  if (dateTo)   filtered = filtered.filter(d => d.date <= dateTo);
-
-  const labels = filtered.map(d => d.date);
-  const raw    = filtered.map(d => d.percentage);
-  const rolled = rollingAvg(raw, _rollingWindow);
-
   const tc = themeColors();
   destroyChart('timeSeries');
 
-  const datasets = [
-    {
-      label: 'Raw %',
-      data: raw,
+  if (_tsView === 'match') {
+    // Match View: group by date+match, avg % per match
+    let matches = groupByMatch(_globalDivision)
+      .filter(m => m.avgPct != null);
+    if (dateFrom) matches = matches.filter(m => m.match_date >= dateFrom);
+    if (dateTo)   matches = matches.filter(m => m.match_date <= dateTo);
+
+    const labels = matches.map(m => truncate(m.match_name, 22));
+    const yVals  = matches.map(m => m.avgPct);
+    const trend  = computeTrendLine(yVals, _tsTrend);
+
+    const datasets = [{
+      label: 'Avg % per Match',
+      data: yVals,
+      borderColor: PALETTE[0],
+      backgroundColor: 'rgba(99,102,241,0.08)',
+      pointRadius: 4,
+      tension: 0.3,
+      fill: true,
+    }];
+    if (trend) {
+      datasets.push({
+        label: `Trend (last ${_tsTrend})`,
+        data: trend,
+        borderColor: '#f59e0b',
+        borderWidth: 2,
+        borderDash: [6, 3],
+        pointRadius: 0,
+        tension: 0,
+      });
+    }
+
+    _charts['timeSeries'] = new Chart(
+      document.getElementById('timeSeriesChart').getContext('2d'),
+      {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: { display: !!trend },
+            tooltip: {
+              callbacks: {
+                title: (items) => {
+                  const m = matches[items[0].dataIndex];
+                  return m ? m.match_name : items[0].label;
+                },
+                afterTitle: (items) => {
+                  const m = matches[items[0].dataIndex];
+                  return m ? m.match_date : '';
+                },
+                label: (item) => {
+                  if (item.datasetIndex === 1) return `Trend: ${item.parsed.y.toFixed(2)}%`;
+                  const m = matches[item.dataIndex];
+                  return m
+                    ? [`Avg %: ${m.avgPct.toFixed(2)}%`, `Classifiers: ${m.count}`]
+                    : `${item.parsed.y.toFixed(2)}%`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: { grid: { display: false }, ticks: { maxRotation: 35, font: { size: 10 } } },
+            y: {
+              min: 0, max: 110,
+              grid: { color: tc.grid },
+              ticks: { callback: v => v + '%' }
+            }
+          }
+        }
+      }
+    );
+  } else {
+    // Classifier View: individual scores sorted by date, x = classifier_number
+    let rawData = ((_data.time_series || {})[_globalDivision] || [])
+      .filter(d => d.date && d.percentage != null)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    if (dateFrom) rawData = rawData.filter(d => d.date >= dateFrom);
+    if (dateTo)   rawData = rawData.filter(d => d.date <= dateTo);
+
+    const labels = rawData.map(d => d.classifier_number || d.date);
+    const yVals  = rawData.map(d => d.percentage);
+    const trend  = computeTrendLine(yVals, _tsTrend);
+
+    const datasets = [{
+      label: 'Classifier %',
+      data: yVals,
       borderColor: PALETTE[0],
       backgroundColor: 'rgba(99,102,241,0.08)',
       pointRadius: 3,
       tension: 0.3,
       fill: true,
+    }];
+    if (trend) {
+      datasets.push({
+        label: `Trend (last ${_tsTrend})`,
+        data: trend,
+        borderColor: '#f59e0b',
+        borderWidth: 2,
+        borderDash: [6, 3],
+        pointRadius: 0,
+        tension: 0,
+      });
     }
-  ];
 
-  if (_rollingWindow > 0) {
-    datasets.push({
-      label: `Rolling ${_rollingWindow}`,
-      data: rolled,
-      borderColor: '#f59e0b',
-      borderWidth: 2,
-      pointRadius: 0,
-      tension: 0.4,
-    });
-  }
-
-  _charts['timeSeries'] = new Chart(
-    document.getElementById('timeSeriesChart').getContext('2d'),
-    {
-      type: 'line',
-      data: { labels, datasets },
-      options: {
-        responsive: true,
-        maintainAspectRatio: true,
-        plugins: { legend: { display: _rollingWindow > 0 } },
-        scales: {
-          x: { type: 'time', time: { unit: 'month' }, grid: { color: tc.grid } },
-          y: {
-            min: 0, max: 110,
-            grid: { color: tc.grid },
-            ticks: { callback: v => v + '%' }
+    _charts['timeSeries'] = new Chart(
+      document.getElementById('timeSeriesChart').getContext('2d'),
+      {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: { display: !!trend },
+            tooltip: {
+              callbacks: {
+                label: (item) => {
+                  if (item.datasetIndex === 1) return `Trend: ${item.parsed.y.toFixed(2)}%`;
+                  const d = rawData[item.dataIndex];
+                  return d ? [`${item.parsed.y.toFixed(2)}%`, `Date: ${d.date}`] : `${item.parsed.y.toFixed(2)}%`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: { grid: { display: false }, ticks: { maxRotation: 35, font: { size: 10 } } },
+            y: {
+              min: 0, max: 110,
+              grid: { color: tc.grid },
+              ticks: { callback: v => v + '%' }
+            }
           }
         }
       }
-    }
-  );
+    );
+  }
 }
 
-function setRolling(btn, w) {
-  _rollingWindow = w;
-  document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+function setTsView(btn, mode) {
+  _tsView = mode;
+  btn.closest('.toggle-group').querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   updateTimeSeriesChart();
 }
 
-// ── 4. Hit Factor Chart ───────────────────────────────────────────────
+function setTsTrend(btn, n) {
+  _tsTrend = n;
+  btn.closest('.toggle-group').querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  updateTimeSeriesChart();
+}
+
+// ── 5. Hit Factor Chart ───────────────────────────────────────────────
 function updateHFChart() {
-  const div = document.getElementById('hfDivisionFilter').value;
-  const rawData = (_data.time_series || {})[div] || [];
-
-  const filtered = rawData
-    .filter(d => d.date && d.hit_factor != null)
-    .sort((a,b) => a.date.localeCompare(b.date));
-
-  const labels = filtered.map(d => d.date);
-  const hfs    = filtered.map(d => d.hit_factor);
-  const maxHF  = Math.max(...hfs.filter(v => v != null));
-
-  const pointColors = hfs.map(v => v === maxHF ? '#f59e0b' : PALETTE[1]);
-
   const tc = themeColors();
   destroyChart('hf');
 
-  _charts['hf'] = new Chart(
-    document.getElementById('hfChart').getContext('2d'),
-    {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [{
-          label: 'Hit Factor',
-          data: hfs,
-          borderColor: PALETTE[1],
-          pointBackgroundColor: pointColors,
-          pointRadius: 4,
-          tension: 0.3,
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: true,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { type: 'time', time: { unit: 'month' }, grid: { color: tc.grid } },
-          y: { grid: { color: tc.grid } }
-        }
-      }
+  if (_hfView === 'match') {
+    // Match View: group by date+match, avg HF per match
+    const matches = groupByMatch(_globalDivision).filter(m => m.avgHF != null);
+    const labels = matches.map(m => truncate(m.match_name, 22));
+    const yVals  = matches.map(m => m.avgHF);
+    const maxHF  = Math.max(...yVals.filter(v => v != null), 0);
+    const trend  = computeTrendLine(yVals, _hfTrend);
+
+    const datasets = [{
+      label: 'Avg HF per Match',
+      data: yVals,
+      borderColor: PALETTE[1],
+      pointBackgroundColor: yVals.map(v => v === maxHF ? '#f59e0b' : PALETTE[1]),
+      pointRadius: 4,
+      tension: 0.3,
+    }];
+    if (trend) {
+      datasets.push({
+        label: `Trend (last ${_hfTrend})`,
+        data: trend,
+        borderColor: '#f59e0b',
+        borderWidth: 2,
+        borderDash: [6, 3],
+        pointRadius: 0,
+        tension: 0,
+      });
     }
-  );
-}
 
-// ── 5. Division Analytics ─────────────────────────────────────────────
-function renderDivisionCharts() {
-  const divStats = _data.division_stats || {};
-  const labels   = Object.keys(divStats);
-  const pcts     = labels.map(d => divStats[d].percentage);
-  const colors   = labels.map(d => classToColor(divStats[d].class));
-
-  const tc = themeColors();
-
-  // Bar chart
-  destroyChart('divBar');
-  _charts['divBar'] = new Chart(
-    document.getElementById('divBarChart').getContext('2d'),
-    {
-      type: 'bar',
-      data: {
-        labels,
-        datasets: [{ label: 'Avg %', data: pcts, backgroundColor: colors }]
-      },
-      options: {
-        responsive: true,
-        plugins: { legend: { display: false } },
-        scales: {
-          y: { min: 0, max: 110, grid: { color: tc.grid }, ticks: { callback: v => v + '%' } },
-          x: { grid: { display: false } }
-        }
-      }
-    }
-  );
-
-  // Radar chart
-  destroyChart('divRadar');
-  _charts['divRadar'] = new Chart(
-    document.getElementById('divRadarChart').getContext('2d'),
-    {
-      type: 'radar',
-      data: {
-        labels,
-        datasets: [{
-          label: 'Classification %',
-          data: pcts,
-          borderColor: PALETTE[0],
-          backgroundColor: 'rgba(99,102,241,0.15)',
-          pointBackgroundColor: PALETTE[0],
-        }]
-      },
-      options: {
-        responsive: true,
-        plugins: { legend: { display: false } },
-        scales: {
-          r: {
-            min: 0, max: 100,
-            grid: { color: tc.grid },
-            ticks: { callback: v => v + '%', backdropColor: 'transparent' }
+    _charts['hf'] = new Chart(
+      document.getElementById('hfChart').getContext('2d'),
+      {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: { display: !!trend },
+            tooltip: {
+              callbacks: {
+                title: (items) => {
+                  const m = matches[items[0].dataIndex];
+                  return m ? m.match_name : items[0].label;
+                },
+                afterTitle: (items) => {
+                  const m = matches[items[0].dataIndex];
+                  return m ? m.match_date : '';
+                },
+                label: (item) => {
+                  if (item.datasetIndex === 1) return `Trend: ${item.parsed.y.toFixed(4)}`;
+                  const m = matches[item.dataIndex];
+                  return m
+                    ? [`Avg HF: ${m.avgHF.toFixed(4)}`, `Classifiers: ${m.count}`]
+                    : item.parsed.y.toFixed(4);
+                }
+              }
+            }
+          },
+          scales: {
+            x: { grid: { display: false }, ticks: { maxRotation: 35, font: { size: 10 } } },
+            y: { grid: { color: tc.grid } }
           }
         }
       }
+    );
+  } else {
+    // Classifier View: individual scores sorted by date, x = classifier_number
+    const rawData = ((_data.time_series || {})[_globalDivision] || [])
+      .filter(d => d.date && d.hit_factor != null)
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    const labels = rawData.map(d => d.classifier_number || d.date);
+    const yVals  = rawData.map(d => d.hit_factor);
+    const maxHF  = Math.max(...yVals.filter(v => v != null), 0);
+    const trend  = computeTrendLine(yVals, _hfTrend);
+
+    const datasets = [{
+      label: 'Hit Factor',
+      data: yVals,
+      borderColor: PALETTE[1],
+      pointBackgroundColor: yVals.map(v => v === maxHF ? '#f59e0b' : PALETTE[1]),
+      pointRadius: 4,
+      tension: 0.3,
+    }];
+    if (trend) {
+      datasets.push({
+        label: `Trend (last ${_hfTrend})`,
+        data: trend,
+        borderColor: '#f59e0b',
+        borderWidth: 2,
+        borderDash: [6, 3],
+        pointRadius: 0,
+        tension: 0,
+      });
     }
-  );
+
+    _charts['hf'] = new Chart(
+      document.getElementById('hfChart').getContext('2d'),
+      {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: { display: !!trend },
+            tooltip: {
+              callbacks: {
+                label: (item) => {
+                  if (item.datasetIndex === 1) return `Trend: ${item.parsed.y.toFixed(4)}`;
+                  const d = rawData[item.dataIndex];
+                  return d ? [`HF: ${item.parsed.y.toFixed(4)}`, `Date: ${d.date}`] : item.parsed.y.toFixed(4);
+                }
+              }
+            }
+          },
+          scales: {
+            x: { grid: { display: false }, ticks: { maxRotation: 35, font: { size: 10 } } },
+            y: { grid: { color: tc.grid } }
+          }
+        }
+      }
+    );
+  }
+}
+
+function setHfView(btn, mode) {
+  _hfView = mode;
+  btn.closest('.toggle-group').querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  updateHFChart();
+}
+
+function setHfTrend(btn, n) {
+  _hfTrend = n;
+  btn.closest('.toggle-group').querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  updateHFChart();
 }
 
 // ── 6. Classifier Breakdown ───────────────────────────────────────────
 function renderClassifierBreakdown() {
-  const clsf = (_data.classifier_breakdown || []).filter(c => c.percentage != null);
-  const sorted = [...clsf].sort((a,b) => b.percentage - a.percentage);
+  const clsf = (_data.classifier_breakdown || [])
+    .filter(c => c.percentage != null && c.division === _globalDivision);
+  const sorted = [...clsf].sort((a, b) => b.percentage - a.percentage);
   const top10  = sorted.slice(0, 10);
   const bot10  = sorted.slice(-10).reverse();
 
@@ -615,15 +851,19 @@ function renderClassifierBreakdown() {
     </tr>`;
   }
 
-  document.getElementById('top10Body').innerHTML = top10.map((c,i) => row(c,i,true)).join('') || '<tr><td colspan="4" class="text-muted">No data</td></tr>';
-  document.getElementById('bottom10Body').innerHTML = bot10.map((c,i) => row(c,i,false)).join('') || '<tr><td colspan="4" class="text-muted">No data</td></tr>';
+  document.getElementById('top10Body').innerHTML =
+    top10.map((c, i) => row(c, i, true)).join('') ||
+    '<tr><td colspan="4" class="text-muted">No data</td></tr>';
+  document.getElementById('bottom10Body').innerHTML =
+    bot10.map((c, i) => row(c, i, false)).join('') ||
+    '<tr><td colspan="4" class="text-muted">No data</td></tr>';
 
-  // Frequency chart — top 15 most-shot classifiers
+  // Frequency chart — top 15 most-shot classifiers for selected division
   const freq = {};
-  (_data.classifier_breakdown || []).forEach(c => {
-    freq[c.classifier_number] = (freq[c.classifier_number] || 0) + 1;
-  });
-  const freqSorted = Object.entries(freq).sort((a,b) => b[1]-a[1]).slice(0, 15);
+  (_data.classifier_breakdown || [])
+    .filter(c => c.division === _globalDivision)
+    .forEach(c => { freq[c.classifier_number] = (freq[c.classifier_number] || 0) + 1; });
+  const freqSorted = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 15);
 
   const tc = themeColors();
   destroyChart('freq');
@@ -633,7 +873,7 @@ function renderClassifierBreakdown() {
       type: 'bar',
       data: {
         labels: freqSorted.map(([k]) => k),
-        datasets: [{ label: 'Times Shot', data: freqSorted.map(([,v]) => v), backgroundColor: PALETTE[3] }]
+        datasets: [{ label: 'Times Shot', data: freqSorted.map(([, v]) => v), backgroundColor: PALETTE[3] }]
       },
       options: {
         indexAxis: 'y',
@@ -650,45 +890,45 @@ function renderClassifierBreakdown() {
 
 // ── 7. Statistical Summary ────────────────────────────────────────────
 function renderStats() {
-  const clsf = (_data.classifier_breakdown || []).filter(c => c.percentage != null).map(c => c.percentage);
+  const clsf = (_data.classifier_breakdown || [])
+    .filter(c => c.percentage != null && c.division === _globalDivision)
+    .map(c => c.percentage);
 
   if (!clsf.length) {
     document.getElementById('statsGrid').innerHTML = '<p class="text-muted">No classifier data available.</p>';
     return;
   }
 
-  clsf.sort((a,b) => a-b);
-  const mean   = clsf.reduce((a,b)=>a+b,0) / clsf.length;
+  clsf.sort((a, b) => a - b);
+  const mean   = clsf.reduce((a, b) => a + b, 0) / clsf.length;
   const median = clsf.length % 2 === 0
-    ? (clsf[clsf.length/2-1] + clsf[clsf.length/2]) / 2
-    : clsf[Math.floor(clsf.length/2)];
-  const std = Math.sqrt(clsf.map(v=>(v-mean)**2).reduce((a,b)=>a+b,0) / clsf.length);
+    ? (clsf[clsf.length / 2 - 1] + clsf[clsf.length / 2]) / 2
+    : clsf[Math.floor(clsf.length / 2)];
+  const std = Math.sqrt(clsf.map(v => (v - mean) ** 2).reduce((a, b) => a + b, 0) / clsf.length);
   const volatility = mean ? (std / mean * 100) : 0;
 
-  // Trend slope (simple linear regression)
   let slope = null;
   const n = clsf.length;
   if (n >= 2) {
-    const sx = n*(n-1)/2, sx2 = (n-1)*n*(2*n-1)/6;
-    const sy = clsf.reduce((a,b)=>a+b,0);
-    const sxy = clsf.reduce((a,v,i)=>a+i*v,0);
-    slope = (n*sxy - sx*sy) / (n*sx2 - sx*sx);
+    const sx = n * (n - 1) / 2, sx2 = (n - 1) * n * (2 * n - 1) / 6;
+    const sy = clsf.reduce((a, b) => a + b, 0);
+    const sxy = clsf.reduce((a, v, i) => a + i * v, 0);
+    slope = (n * sxy - sx * sy) / (n * sx2 - sx * sx);
   }
 
-  // YoY: last 50% vs prior 50%
   const half = Math.floor(clsf.length / 2);
   let yoy = null;
   if (half > 0) {
     const recent = clsf.slice(-half);
     const prior  = clsf.slice(0, half);
-    yoy = recent.reduce((a,b)=>a+b,0)/recent.length - prior.reduce((a,b)=>a+b,0)/prior.length;
+    yoy = recent.reduce((a, b) => a + b, 0) / recent.length - prior.reduce((a, b) => a + b, 0) / prior.length;
   }
 
   const stats = [
-    { label: 'Mean %',      value: fmtPct(mean),     sub: 'Average across all classifiers' },
-    { label: 'Median %',    value: fmtPct(median),   sub: '50th percentile' },
-    { label: 'Std Dev',     value: std.toFixed(2),   sub: 'Consistency measure' },
-    { label: 'Volatility',  value: volatility.toFixed(1) + '%', sub: '(std/mean × 100)' },
+    { label: 'Mean %',      value: fmtPct(mean),                        sub: 'Average across all classifiers' },
+    { label: 'Median %',    value: fmtPct(median),                      sub: '50th percentile' },
+    { label: 'Std Dev',     value: std.toFixed(2),                      sub: 'Consistency measure' },
+    { label: 'Volatility',  value: volatility.toFixed(1) + '%',         sub: '(std/mean × 100)' },
     { label: 'Trend Slope', value: slope != null ? slope.toFixed(4) : '—', sub: 'Per-shot improvement rate' },
     { label: 'YoY Est.',    value: yoy != null ? (yoy >= 0 ? '+' : '') + yoy.toFixed(2) + '%' : '—', sub: 'Recent vs prior half' },
   ];
@@ -704,12 +944,11 @@ function renderStats() {
 
 // ── Theme change listener — re-render charts ──────────────────────────
 document.getElementById('themeToggle').addEventListener('click', () => {
-  // Brief delay to let CSS vars update
   setTimeout(() => {
     if (!_data) return;
+    renderDivBarChart();
     updateTimeSeriesChart();
     updateHFChart();
-    renderDivisionCharts();
     renderClassifierBreakdown();
   }, 50);
 });
