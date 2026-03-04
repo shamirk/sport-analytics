@@ -44,6 +44,11 @@ async def scrape_and_store(member_number: str, db_session: Any) -> None:
         db_session.flush()
 
         # ── Helper: get or create Division ───────────────────────────────────
+        _KNOWN_ABBREVS = {
+            "Open": "OPN", "Limited": "LTD", "Limited 10": "L10",
+            "Production": "PROD", "Revolver": "REV", "Single Stack": "SS",
+            "Carry Optics": "CO", "PCC": "PCC", "Limited Optics": "LO",
+        }
         _div_cache: dict[str, int] = {}
 
         def _get_division_id(name: str) -> int | None:
@@ -53,7 +58,12 @@ async def scrape_and_store(member_number: str, db_session: Any) -> None:
                 return _div_cache[name]
             div = db_session.query(Division).filter(Division.name == name).first()
             if not div:
-                abbr = "".join(w[0] for w in name.split())[:10]
+                abbr = _KNOWN_ABBREVS.get(name, name[:10].upper().replace(" ", ""))
+                # Ensure uniqueness by appending a counter if needed
+                base, counter = abbr, 1
+                while db_session.query(Division).filter(Division.abbreviation == abbr).first():
+                    abbr = f"{base[:8]}{counter}"
+                    counter += 1
                 div = Division(name=name, abbreviation=abbr)
                 db_session.add(div)
                 db_session.flush()
