@@ -57,6 +57,42 @@ uvicorn app.main:app --reload
 
 Copy `.env.example` to `.env` and update values before running.
 
+## Testing
+
+The test suite uses SQLite in-memory — no running database or Redis required.
+
+```bash
+# One-time setup (if you haven't already)
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+
+# Run all tests
+pytest
+
+# Run with verbose output
+pytest -v
+
+# Run a specific test file
+pytest tests/test_analytics_engine.py
+
+# Run a specific test class or case
+pytest tests/test_routes.py::TestGetMember
+pytest tests/test_routes.py::TestGetMember::test_returns_404_for_unknown_member
+```
+
+The test suite covers:
+
+| Module | File |
+|--------|------|
+| Input validation | `tests/test_validation.py` |
+| Custom exceptions | `tests/test_exceptions.py` |
+| TTL cache | `tests/test_cache.py` |
+| Analytics engine | `tests/test_analytics_engine.py` |
+| HTML scraper (parsing only) | `tests/test_uspsa_scraper.py` |
+| Background task manager | `tests/test_task_manager.py` |
+| API routes | `tests/test_routes.py` |
+
 ## Architecture
 
 ```
