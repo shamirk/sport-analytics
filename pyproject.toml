@@ -31,6 +31,10 @@ dependencies = [
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
