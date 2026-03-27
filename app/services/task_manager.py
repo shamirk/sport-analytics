@@ -12,7 +12,7 @@ from app.services.cache import cache
 
 logger = structlog.get_logger(__name__)
 
-# job_id -> {status, member_number, started_at, completed_at, error}
+# job_id -> {status, member_number, started_at, completed_at, error, job_type}
 job_status: dict[str, dict[str, Any]] = {}
 
 
@@ -137,12 +137,118 @@ async def scrape_and_store(member_number: str, db_session: Any) -> None:
         logger.error("scrape_failed", job_id=job_id, member_number=member_number, error=str(exc))
 
 
-def create_job(member_number: str) -> str:
+async def scrape_practiscore_and_store(member_number: str, db_session: Any) -> None:
+    """Scrape PractiScore data for *member_number*, persist to DB and cache."""
+    from datetime import datetime as dt
+
+    from app.models import Member
+    from app.models.practiscore_match import PractiscoreMatch
+    from app.models.practiscore_result import PractiscoreResult
+    from app.services.practiscore_scraper import scrape_member_matches
+
+    job_id = _find_pending_job_by_type(member_number, "practiscore")
+    if job_id is None:
+        return
+
+    job_status[job_id]["status"] = "in_progress"
+    job_status[job_id]["started_at"] = datetime.now(timezone.utc).isoformat()
+
+    try:
+        # Ensure the member row exists
+        member = db_session.query(Member).filter(Member.member_number == member_number).first()
+        if not member:
+            member = Member(member_number=member_number)
+            db_session.add(member)
+            db_session.flush()
+
+        matches = await scrape_member_matches(member_number)
+
+        # Clear existing PractiScore data for this member
+        existing_match_ids = [
+            row.id
+            for row in db_session.query(PractiscoreMatch)
+            .filter(PractiscoreMatch.member_id == member.id)
+            .all()
+        ]
+        if existing_match_ids:
+            db_session.query(PractiscoreResult).filter(
+                PractiscoreResult.match_id.in_(existing_match_ids)
+            ).delete(synchronize_session=False)
+        db_session.query(PractiscoreMatch).filter(
+            PractiscoreMatch.member_id == member.id
+        ).delete()
+
+        for m in matches:
+            ps_match = PractiscoreMatch(
+                member_id=member.id,
+                match_name=m["match_name"],
+                match_date=_parse_iso_date(m.get("match_date")),
+                match_level=m.get("match_level"),
+                division=m.get("division") or "",
+                practiscore_match_id=m.get("practiscore_match_id"),
+                source_url=m.get("source_url"),
+                total_competitors=m.get("total_competitors"),
+            )
+            db_session.add(ps_match)
+            db_session.flush()
+
+            for r in m.get("results", []):
+                db_session.add(PractiscoreResult(
+                    match_id=ps_match.id,
+                    shooter_name=r.get("shooter_name") or "",
+                    member_number=r.get("member_number"),
+                    division=r.get("division") or "",
+                    classification=r.get("classification"),
+                    total_points=r.get("total_points"),
+                    total_time=r.get("total_time"),
+                    percent_of_winner=r.get("percent_of_winner"),
+                    placement=r.get("placement"),
+                    is_queried_member=bool(r.get("is_queried_member")),
+                ))
+
+        db_session.commit()
+
+        cache.delete(f"practiscore:{member_number}")
+
+        job_status[job_id]["status"] = "complete"
+        job_status[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+        logger.info(
+            "practiscore_scrape_complete",
+            job_id=job_id,
+            member_number=member_number,
+            matches=len(matches),
+        )
+
+    except Exception as exc:
+        db_session.rollback()
+        job_status[job_id]["status"] = "error"
+        job_status[job_id]["error"] = str(exc)
+        job_status[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+        logger.error(
+            "practiscore_scrape_failed",
+            job_id=job_id,
+            member_number=member_number,
+            error=str(exc),
+        )
+
+
+def _parse_iso_date(date_str: str | None):
+    if not date_str:
+        return None
+    from datetime import date
+    try:
+        return date.fromisoformat(date_str)
+    except (ValueError, TypeError):
+        return None
+
+
+def create_job(member_number: str, job_type: str = "uspsa") -> str:
     """Register a new pending job and return its job_id."""
     job_id = str(uuid.uuid4())
     job_status[job_id] = {
         "status": "pending",
         "member_number": member_number,
+        "job_type": job_type,
         "started_at": None,
         "completed_at": None,
         "error": None,
@@ -150,13 +256,22 @@ def create_job(member_number: str) -> str:
     return job_id
 
 
-def get_pending_job(member_number: str) -> str | None:
+def get_pending_job(member_number: str, job_type: str = "uspsa") -> str | None:
     """Return the job_id of an existing pending job for *member_number*, or None."""
-    return _find_pending_job(member_number)
+    return _find_pending_job_by_type(member_number, job_type)
 
 
 def _find_pending_job(member_number: str) -> str | None:
+    """Legacy helper: find pending USPSA job."""
+    return _find_pending_job_by_type(member_number, "uspsa")
+
+
+def _find_pending_job_by_type(member_number: str, job_type: str) -> str | None:
     for jid, job in job_status.items():
-        if job["member_number"] == member_number and job["status"] == "pending":
+        if (
+            job["member_number"] == member_number
+            and job.get("job_type", "uspsa") == job_type
+            and job["status"] == "pending"
+        ):
             return jid
     return None

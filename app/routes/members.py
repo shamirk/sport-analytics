@@ -12,8 +12,16 @@ from sqlalchemy.orm import Session
 from app.database import SessionLocal, get_db
 from app.limiter import limiter
 from app.models import ClassifierResult, CurrentClassification, Division, MatchResult, Member
+from app.models.practiscore_match import PractiscoreMatch
+from app.models.practiscore_result import PractiscoreResult
 from app.services.cache import CACHE_TTL, cache
-from app.services.task_manager import create_job, get_pending_job, job_status, scrape_and_store
+from app.services.task_manager import (
+    create_job,
+    get_pending_job,
+    job_status,
+    scrape_and_store,
+    scrape_practiscore_and_store,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -281,3 +289,160 @@ async def get_member_status(
         }
 
     return {"member_number": member_number, "status": "not_started"}
+
+
+# ---------------------------------------------------------------------------
+# PractiScore routes
+# ---------------------------------------------------------------------------
+
+async def _run_practiscore_scrape(job_id: str, member_number: str) -> None:
+    """Thin wrapper used by BackgroundTasks for PractiScore scraping."""
+    db = SessionLocal()
+    try:
+        await scrape_practiscore_and_store(member_number, db)
+    finally:
+        db.close()
+
+
+@router.post("/analyze/{member_number}/practiscore")
+@limiter.limit("5/minute")
+async def analyze_member_practiscore(
+    member_number: str,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    """Trigger a PractiScore scrape or return 200 if already cached.
+
+    Returns 202 with job_id if scraping has been queued.
+    """
+    member_number = _validate_member_number(member_number)
+
+    cached = cache.get(f"practiscore:{member_number}")
+    if cached:
+        response.status_code = 200
+        return {"status": "complete", "data": cached}
+
+    pending = get_pending_job(member_number, job_type="practiscore")
+    if pending:
+        response.status_code = 202
+        return {"status": "pending", "job_id": pending}
+
+    job_id = create_job(member_number, job_type="practiscore")
+    background_tasks.add_task(_run_practiscore_scrape, job_id, member_number)
+
+    response.status_code = 202
+    return {"status": "accepted", "job_id": job_id}
+
+
+@router.get("/member/{member_number}/practiscore")
+@limiter.limit("60/minute")
+async def get_member_practiscore(
+    member_number: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Return stored PractiScore match results for a member.
+
+    Response shape::
+
+        {
+            "matches": [...],
+            "stats": { ... }
+        }
+    """
+    member_number = _validate_member_number(member_number)
+
+    cache_key = f"practiscore:{member_number}"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
+
+    member = _get_member_or_404(member_number, db)
+
+    ps_matches = (
+        db.query(PractiscoreMatch)
+        .filter(PractiscoreMatch.member_id == member.id)
+        .order_by(PractiscoreMatch.match_date.asc())
+        .all()
+    )
+
+    if not ps_matches:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "No PractiScore data",
+                "detail": f"No PractiScore match results found for member {member_number}. "
+                          "Trigger a scrape first via POST /api/analyze/{member_number}/practiscore",
+                "code": 404,
+            },
+        )
+
+    matches_out: list[dict] = []
+    placements: list[int] = []
+    percents: list[float] = []
+    percentiles: list[float] = []
+
+    for m in ps_matches:
+        total = m.total_competitors or 0
+
+        # Get this member's result row
+        member_result = (
+            db.query(PractiscoreResult)
+            .filter(
+                PractiscoreResult.match_id == m.id,
+                PractiscoreResult.is_queried_member.is_(True),
+            )
+            .first()
+        )
+
+        placement = member_result.placement if member_result else None
+        pct = float(member_result.percent_of_winner) if member_result and member_result.percent_of_winner is not None else None
+
+        placement_percentile: float | None = None
+        if placement is not None and total and total > 0:
+            # percentile = fraction of field beaten (higher = better)
+            placement_percentile = round((total - placement) / total * 100, 2)
+            percentiles.append(placement_percentile)
+
+        if placement is not None:
+            placements.append(placement)
+        if pct is not None:
+            percents.append(pct)
+
+        matches_out.append({
+            "match_name": m.match_name,
+            "match_date": m.match_date.isoformat() if m.match_date else None,
+            "division": m.division,
+            "match_level": m.match_level,
+            "total_competitors": total or None,
+            "member_placement": placement,
+            "member_percent": pct,
+            "placement_percentile": placement_percentile,
+        })
+
+    # Improvement trend: linear regression slope on percentile over time
+    improvement_trend: float | None = None
+    if len(percentiles) >= 2:
+        n = len(percentiles)
+        sx = n * (n - 1) / 2
+        sy = sum(percentiles)
+        sxy = sum(i * v for i, v in enumerate(percentiles))
+        sx2 = sum(i * i for i in range(n))
+        denom = n * sx2 - sx * sx
+        if abs(denom) > 1e-10:
+            improvement_trend = round((n * sxy - sx * sy) / denom, 4)
+
+    stats = {
+        "total_matches": len(matches_out),
+        "avg_placement_percentile": round(sum(percentiles) / len(percentiles), 2) if percentiles else None,
+        "best_placement": min(placements) if placements else None,
+        "worst_placement": max(placements) if placements else None,
+        "avg_percent_of_winner": round(sum(percents) / len(percents), 2) if percents else None,
+        "improvement_trend": improvement_trend,
+    }
+
+    result = {"matches": matches_out, "stats": stats}
+    cache.set(cache_key, result, ttl=CACHE_TTL)
+    return result

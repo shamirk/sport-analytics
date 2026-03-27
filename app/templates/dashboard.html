@@ -94,6 +94,59 @@
 .num-rank { color: var(--text-muted); font-size: 0.75rem; min-width: 1.5rem; }
 .pct-up   { color: var(--success); }
 .pct-down { color: var(--danger); }
+
+/* ── Tab navigation ──────────────────────────────────────────────── */
+.tab-nav {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid var(--border);
+  margin-bottom: 1.5rem;
+}
+.tab-nav-btn {
+  padding: 0.6rem 1.25rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  transition: color 0.15s, border-color 0.15s;
+}
+.tab-nav-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }
+
+/* ── Match Results tab ───────────────────────────────────────────── */
+.mr-stat-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.mr-scrape-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 1.5rem;
+  font-size: 0.875rem;
+}
+.mr-table-wrap { overflow-x: auto; }
+.mr-table-wrap table { min-width: 640px; }
+th[data-sort] { cursor: pointer; user-select: none; }
+th[data-sort]:hover { color: var(--accent); }
+th[data-sort].asc::after  { content: ' \25B2'; font-size: 0.65em; }
+th[data-sort].desc::after { content: ' \25BC'; font-size: 0.65em; }
 {% endblock %}
 
 {% block nav_extra %}
@@ -131,116 +184,218 @@
 
 <div id="dashboardContent" style="display:none;">
 
-  <!-- ── 1. Avg % per Division (top of dashboard) ───────────────────── -->
-  <section class="card mb-2">
-    <div class="card-title">Avg % per Division</div>
-    <div class="chart-wrap chart-wrap-sm">
-      <canvas id="divBarChart"></canvas>
-    </div>
-  </section>
+  <!-- ── Tab navigation ─────────────────────────────────────────────── -->
+  <nav class="tab-nav">
+    <button class="tab-nav-btn active" onclick="switchTab('classifier')">Classifier Stats</button>
+    <button class="tab-nav-btn" onclick="switchTab('matchresults')">Match Results</button>
+  </nav>
 
-  <!-- ── 2. Global Division Filter ─────────────────────────────────── -->
-  <div class="global-filter mb-2">
-    <label>Division</label>
-    <select id="globalDivisionFilter" onchange="onDivisionChange()"></select>
-  </div>
+  <!-- ════════════════════════════════════════════════════════════════ -->
+  <!-- TAB: Classifier Stats                                           -->
+  <!-- ════════════════════════════════════════════════════════════════ -->
+  <div id="tab-classifier" class="tab-pane active">
 
-  <!-- ── 3. Overview Panel ───────────────────────────────────────────── -->
-  <section>
-    <div class="grid grid-5 mb-2" id="overviewStats">
-      <!-- Filled by JS -->
-    </div>
-  </section>
-
-  <!-- ── 4. Classifier % Over Time ──────────────────────────────────── -->
-  <section class="card mb-2">
-    <div class="section-header">
-      <div class="section-title">Classifier % Over Time</div>
-    </div>
-    <div class="filter-bar">
-      <label>View</label>
-      <div class="toggle-group" id="tsViewToggles">
-        <button class="toggle-btn active" onclick="setTsView(this,'match')">Match View</button>
-        <button class="toggle-btn" onclick="setTsView(this,'classifier')">Classifier View</button>
+    <!-- ── 1. Avg % per Division (top of dashboard) ───────────────── -->
+    <section class="card mb-2">
+      <div class="card-title">Avg % per Division</div>
+      <div class="chart-wrap chart-wrap-sm">
+        <canvas id="divBarChart"></canvas>
       </div>
-      <label>Trend</label>
-      <div class="toggle-group" id="tsTrendToggles">
-        <button class="toggle-btn active" onclick="setTsTrend(this,0)">None</button>
-        <button class="toggle-btn" onclick="setTsTrend(this,5)">Last 5</button>
-        <button class="toggle-btn" onclick="setTsTrend(this,10)">Last 10</button>
-        <button class="toggle-btn" onclick="setTsTrend(this,15)">Last 15</button>
-        <button class="toggle-btn" onclick="setTsTrend(this,20)">Last 20</button>
-      </div>
-      <label>From</label>
-      <input type="date" id="dateFrom" onchange="updateTimeSeriesChart()" />
-      <label>To</label>
-      <input type="date" id="dateTo" onchange="updateTimeSeriesChart()" />
-    </div>
-    <div class="chart-wrap chart-wrap-tall">
-      <canvas id="timeSeriesChart"></canvas>
-    </div>
-  </section>
-
-  <!-- ── 5. Hit Factor Trend ─────────────────────────────────────────── -->
-  <section class="card mb-2">
-    <div class="section-header">
-      <div class="section-title">Hit Factor Trend</div>
-    </div>
-    <div class="filter-bar">
-      <label>View</label>
-      <div class="toggle-group" id="hfViewToggles">
-        <button class="toggle-btn active" onclick="setHfView(this,'match')">Match View</button>
-        <button class="toggle-btn" onclick="setHfView(this,'classifier')">Classifier View</button>
-      </div>
-      <label>Trend</label>
-      <div class="toggle-group" id="hfTrendToggles">
-        <button class="toggle-btn active" onclick="setHfTrend(this,0)">None</button>
-        <button class="toggle-btn" onclick="setHfTrend(this,5)">Last 5</button>
-        <button class="toggle-btn" onclick="setHfTrend(this,10)">Last 10</button>
-        <button class="toggle-btn" onclick="setHfTrend(this,15)">Last 15</button>
-        <button class="toggle-btn" onclick="setHfTrend(this,20)">Last 20</button>
-      </div>
-    </div>
-    <div class="chart-wrap chart-wrap-tall">
-      <canvas id="hfChart"></canvas>
-    </div>
-  </section>
-
-  <!-- ── 6. Classifier Breakdown ────────────────────────────────────── -->
-  <div class="grid grid-2 mb-2">
-    <section class="card">
-      <div class="section-header">
-        <div class="section-title">Top 10 Classifiers</div>
-      </div>
-      <table>
-        <thead><tr><th>#</th><th>Classifier</th><th>Division</th><th>%</th></tr></thead>
-        <tbody id="top10Body"></tbody>
-      </table>
     </section>
-    <section class="card">
-      <div class="section-header">
-        <div class="section-title">Bottom 10 Classifiers</div>
-      </div>
-      <table>
-        <thead><tr><th>#</th><th>Classifier</th><th>Division</th><th>%</th></tr></thead>
-        <tbody id="bottom10Body"></tbody>
-      </table>
-    </section>
-  </div>
 
-  <!-- Frequency chart -->
-  <section class="card mb-2">
-    <div class="card-title">Classifier Frequency</div>
-    <div class="chart-wrap">
-      <canvas id="freqChart"></canvas>
+    <!-- ── 2. Global Division Filter ─────────────────────────────── -->
+    <div class="global-filter mb-2">
+      <label>Division</label>
+      <select id="globalDivisionFilter" onchange="onDivisionChange()"></select>
     </div>
-  </section>
 
-  <!-- ── 7. Statistical Summary ─────────────────────────────────────── -->
-  <section class="card mb-2">
-    <div class="card-title">Statistical Summary</div>
-    <div class="grid grid-3" id="statsGrid"></div>
-  </section>
+    <!-- ── 3. Overview Panel ─────────────────────────────────────── -->
+    <section>
+      <div class="grid grid-5 mb-2" id="overviewStats">
+        <!-- Filled by JS -->
+      </div>
+    </section>
+
+    <!-- ── 4. Classifier % Over Time ─────────────────────────────── -->
+    <section class="card mb-2">
+      <div class="section-header">
+        <div class="section-title">Classifier % Over Time</div>
+      </div>
+      <div class="filter-bar">
+        <label>View</label>
+        <div class="toggle-group" id="tsViewToggles">
+          <button class="toggle-btn active" onclick="setTsView(this,'match')">Match View</button>
+          <button class="toggle-btn" onclick="setTsView(this,'classifier')">Classifier View</button>
+        </div>
+        <label>Trend</label>
+        <div class="toggle-group" id="tsTrendToggles">
+          <button class="toggle-btn active" onclick="setTsTrend(this,0)">None</button>
+          <button class="toggle-btn" onclick="setTsTrend(this,5)">Last 5</button>
+          <button class="toggle-btn" onclick="setTsTrend(this,10)">Last 10</button>
+          <button class="toggle-btn" onclick="setTsTrend(this,15)">Last 15</button>
+          <button class="toggle-btn" onclick="setTsTrend(this,20)">Last 20</button>
+        </div>
+        <label>From</label>
+        <input type="date" id="dateFrom" onchange="updateTimeSeriesChart()" />
+        <label>To</label>
+        <input type="date" id="dateTo" onchange="updateTimeSeriesChart()" />
+      </div>
+      <div class="chart-wrap chart-wrap-tall">
+        <canvas id="timeSeriesChart"></canvas>
+      </div>
+    </section>
+
+    <!-- ── 5. Hit Factor Trend ─────────────────────────────────────── -->
+    <section class="card mb-2">
+      <div class="section-header">
+        <div class="section-title">Hit Factor Trend</div>
+      </div>
+      <div class="filter-bar">
+        <label>View</label>
+        <div class="toggle-group" id="hfViewToggles">
+          <button class="toggle-btn active" onclick="setHfView(this,'match')">Match View</button>
+          <button class="toggle-btn" onclick="setHfView(this,'classifier')">Classifier View</button>
+        </div>
+        <label>Trend</label>
+        <div class="toggle-group" id="hfTrendToggles">
+          <button class="toggle-btn active" onclick="setHfTrend(this,0)">None</button>
+          <button class="toggle-btn" onclick="setHfTrend(this,5)">Last 5</button>
+          <button class="toggle-btn" onclick="setHfTrend(this,10)">Last 10</button>
+          <button class="toggle-btn" onclick="setHfTrend(this,15)">Last 15</button>
+          <button class="toggle-btn" onclick="setHfTrend(this,20)">Last 20</button>
+        </div>
+      </div>
+      <div class="chart-wrap chart-wrap-tall">
+        <canvas id="hfChart"></canvas>
+      </div>
+    </section>
+
+    <!-- ── 6. Classifier Breakdown ────────────────────────────────── -->
+    <div class="grid grid-2 mb-2">
+      <section class="card">
+        <div class="section-header">
+          <div class="section-title">Top 10 Classifiers</div>
+        </div>
+        <table>
+          <thead><tr><th>#</th><th>Classifier</th><th>Division</th><th>%</th></tr></thead>
+          <tbody id="top10Body"></tbody>
+        </table>
+      </section>
+      <section class="card">
+        <div class="section-header">
+          <div class="section-title">Bottom 10 Classifiers</div>
+        </div>
+        <table>
+          <thead><tr><th>#</th><th>Classifier</th><th>Division</th><th>%</th></tr></thead>
+          <tbody id="bottom10Body"></tbody>
+        </table>
+      </section>
+    </div>
+
+    <!-- Frequency chart -->
+    <section class="card mb-2">
+      <div class="card-title">Classifier Frequency</div>
+      <div class="chart-wrap">
+        <canvas id="freqChart"></canvas>
+      </div>
+    </section>
+
+    <!-- ── 7. Statistical Summary ─────────────────────────────────── -->
+    <section class="card mb-2">
+      <div class="card-title">Statistical Summary</div>
+      <div class="grid grid-3" id="statsGrid"></div>
+    </section>
+
+  </div><!-- /#tab-classifier -->
+
+  <!-- ════════════════════════════════════════════════════════════════ -->
+  <!-- TAB: Match Results                                              -->
+  <!-- ════════════════════════════════════════════════════════════════ -->
+  <div id="tab-matchresults" class="tab-pane">
+
+    <!-- Scrape trigger banner -->
+    <div class="mr-scrape-banner" id="mrScrapeBanner">
+      <span id="mrBannerMsg">Load PractiScore match results for this member.</span>
+      <button class="btn btn-primary" onclick="triggerPractiscoreScrape()" id="mrScrapeBtn">
+        Fetch Match Results
+      </button>
+    </div>
+
+    <!-- Loading / error states for this tab -->
+    <div id="mrLoading" style="display:none;" class="card mb-2">
+      <div class="loading-state">
+        <div class="spinner"></div>
+        <div class="text-muted">Scraping PractiScore… this may take a minute.</div>
+      </div>
+    </div>
+    <div id="mrError" style="display:none;" class="card mb-2">
+      <div class="error-state">
+        <div class="error-icon">&#x26A0;&#xFE0F;</div>
+        <div class="error-message" id="mrErrorMsg"></div>
+        <button class="btn btn-primary" onclick="loadPractiscoreData()">Retry</button>
+      </div>
+    </div>
+
+    <!-- Content (hidden until data loads) -->
+    <div id="mrContent" style="display:none;">
+
+      <!-- Stat cards -->
+      <div class="mr-stat-cards" id="mrStatCards"></div>
+
+      <!-- Placement % Over Time -->
+      <section class="card mb-2">
+        <div class="section-title">Finish % Over Time</div>
+        <div class="text-muted" style="font-size:0.8rem; margin-bottom:0.5rem;">
+          % of winner's score (100% = won the match)
+        </div>
+        <div class="chart-wrap chart-wrap-tall">
+          <canvas id="mrPctChart"></canvas>
+        </div>
+      </section>
+
+      <!-- Placement Rank Over Time -->
+      <section class="card mb-2">
+        <div class="section-title">Placement Rank Over Time</div>
+        <div class="text-muted" style="font-size:0.8rem; margin-bottom:0.5rem;">
+          Lower rank number = better finish (y-axis inverted)
+        </div>
+        <div class="chart-wrap chart-wrap-tall">
+          <canvas id="mrRankChart"></canvas>
+        </div>
+      </section>
+
+      <!-- Match Level Distribution -->
+      <section class="card mb-2">
+        <div class="section-title">Avg Finish % by Match Level</div>
+        <div class="chart-wrap chart-wrap-sm">
+          <canvas id="mrLevelChart"></canvas>
+        </div>
+      </section>
+
+      <!-- Match History Table -->
+      <section class="card mb-2">
+        <div class="section-title" style="margin-bottom:0.75rem;">Match History</div>
+        <div class="mr-table-wrap">
+          <table id="mrTable">
+            <thead>
+              <tr>
+                <th data-sort="match_date">Date</th>
+                <th data-sort="match_name">Match Name</th>
+                <th data-sort="division">Division</th>
+                <th data-sort="match_level">Level</th>
+                <th data-sort="member_placement">Place</th>
+                <th data-sort="total_competitors">Total</th>
+                <th data-sort="member_percent">Finish %</th>
+                <th data-sort="placement_percentile">Percentile</th>
+              </tr>
+            </thead>
+            <tbody id="mrTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+    </div><!-- /#mrContent -->
+  </div><!-- /#tab-matchresults -->
 
 </div><!-- /#dashboardContent -->
 {% endblock %}
@@ -950,10 +1105,403 @@ document.getElementById('themeToggle').addEventListener('click', () => {
     updateTimeSeriesChart();
     updateHFChart();
     renderClassifierBreakdown();
+    if (_mrData) renderMatchResultsCharts();
   }, 50);
 });
 
 // ── Init ──────────────────────────────────────────────────────────────
 loadDashboard();
+
+// ═══════════════════════════════════════════════════════════════════════
+// TAB SYSTEM
+// ═══════════════════════════════════════════════════════════════════════
+
+let _activeTab = 'classifier';
+
+function switchTab(tabId) {
+  _activeTab = tabId;
+  document.querySelectorAll('.tab-nav-btn').forEach(btn => btn.classList.remove('active'));
+  document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
+  document.getElementById('tab-' + tabId).classList.add('active');
+  // Find the button by its onclick attribute pattern
+  document.querySelectorAll('.tab-nav-btn').forEach(btn => {
+    if (btn.getAttribute('onclick') && btn.getAttribute('onclick').includes(tabId)) {
+      btn.classList.add('active');
+    }
+  });
+
+  if (tabId === 'matchresults' && !_mrData && !_mrLoading) {
+    loadPractiscoreData();
+  }
+  // Resize charts when tab becomes visible
+  if (tabId === 'classifier' && _data) {
+    setTimeout(() => {
+      Object.values(_charts).forEach(c => c && c.resize && c.resize());
+    }, 50);
+  }
+  if (tabId === 'matchresults' && _mrData) {
+    setTimeout(() => {
+      Object.values(_mrCharts).forEach(c => c && c.resize && c.resize());
+    }, 50);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// MATCH RESULTS TAB
+// ═══════════════════════════════════════════════════════════════════════
+
+let _mrData = null;
+let _mrCharts = {};
+let _mrLoading = false;
+let _mrPollTimer = null;
+let _mrSortCol = 'match_date';
+let _mrSortDir = 'asc';
+
+function mrShow(id) { document.getElementById(id).style.display = ''; }
+function mrHide(id) { document.getElementById(id).style.display = 'none'; }
+
+async function loadPractiscoreData() {
+  if (_mrLoading) return;
+  mrHide('mrError');
+  mrHide('mrContent');
+
+  const cached = await fetchPractiscoreResults();
+  if (cached) {
+    _mrData = cached;
+    mrHide('mrLoading');
+    mrShow('mrContent');
+    renderMatchResultsAll();
+    updateMrBanner('loaded');
+    return;
+  }
+  // No data yet — show banner only
+  updateMrBanner('none');
+}
+
+async function fetchPractiscoreResults() {
+  try {
+    const resp = await fetch(`/api/member/${MEMBER}/practiscore`);
+    if (resp.status === 404) return null;
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_) {
+    return null;
+  }
+}
+
+async function triggerPractiscoreScrape() {
+  _mrLoading = true;
+  updateMrBanner('scraping');
+  mrShow('mrLoading');
+  mrHide('mrError');
+  mrHide('mrContent');
+
+  try {
+    const resp = await fetch(`/api/analyze/${MEMBER}/practiscore`, { method: 'POST' });
+    const body = await resp.json();
+
+    if (resp.status === 200 && body.status === 'complete') {
+      // Cached result returned immediately
+      mrHide('mrLoading');
+      _mrLoading = false;
+      const data = await fetchPractiscoreResults();
+      if (data) {
+        _mrData = data;
+        mrShow('mrContent');
+        renderMatchResultsAll();
+        updateMrBanner('loaded');
+      }
+      return;
+    }
+
+    // Poll for job completion
+    const jobId = body.job_id;
+    if (!jobId) {
+      throw new Error('No job_id returned');
+    }
+    _pollPractiscoreJob(jobId);
+  } catch (err) {
+    _mrLoading = false;
+    mrHide('mrLoading');
+    document.getElementById('mrErrorMsg').textContent = err.message || 'Failed to start scrape.';
+    mrShow('mrError');
+    updateMrBanner('error');
+  }
+}
+
+async function _pollPractiscoreJob(jobId) {
+  const poll = async () => {
+    try {
+      // We poll the generic status endpoint — it covers all job types
+      const resp = await fetch(`/api/member/${MEMBER}/status`);
+      if (!resp.ok) throw new Error(`Status check failed: ${resp.status}`);
+      const body = await resp.json();
+
+      if (body.status === 'complete' || body.status === 'not_started') {
+        clearInterval(_mrPollTimer);
+        _mrPollTimer = null;
+        _mrLoading = false;
+        mrHide('mrLoading');
+        const data = await fetchPractiscoreResults();
+        if (data) {
+          _mrData = data;
+          mrShow('mrContent');
+          renderMatchResultsAll();
+          updateMrBanner('loaded');
+        } else {
+          updateMrBanner('none');
+        }
+        return;
+      }
+      if (body.status === 'error') {
+        clearInterval(_mrPollTimer);
+        _mrPollTimer = null;
+        _mrLoading = false;
+        mrHide('mrLoading');
+        document.getElementById('mrErrorMsg').textContent = body.error || 'Scrape failed.';
+        mrShow('mrError');
+        updateMrBanner('error');
+        return;
+      }
+    } catch (_) {}
+  };
+
+  _mrPollTimer = setInterval(poll, 3000);
+}
+
+function updateMrBanner(state) {
+  const banner = document.getElementById('mrScrapeBanner');
+  const msg    = document.getElementById('mrBannerMsg');
+  const btn    = document.getElementById('mrScrapeBtn');
+
+  if (state === 'loaded') {
+    banner.style.display = 'none';
+    return;
+  }
+  banner.style.display = '';
+  if (state === 'none') {
+    msg.textContent = 'No PractiScore data yet for this member.';
+    btn.textContent = 'Fetch Match Results';
+    btn.disabled = false;
+  } else if (state === 'scraping') {
+    msg.textContent = 'Scraping PractiScore… this can take 1-2 minutes.';
+    btn.textContent = 'Scraping…';
+    btn.disabled = true;
+  } else if (state === 'error') {
+    msg.textContent = 'Scrape encountered an error.';
+    btn.textContent = 'Retry';
+    btn.disabled = false;
+  }
+}
+
+// ── Render all Match Results sections ─────────────────────────────────
+function renderMatchResultsAll() {
+  if (!_mrData) return;
+  renderMrStatCards();
+  renderMatchResultsCharts();
+  renderMrTable();
+}
+
+function renderMrStatCards() {
+  const s = _mrData.stats || {};
+  const cards = [
+    { label: 'Total Matches',    value: s.total_matches ?? '—' },
+    { label: 'Avg Finish %',     value: s.avg_percent_of_winner != null ? s.avg_percent_of_winner.toFixed(1) + '%' : '—' },
+    { label: 'Best Placement',   value: s.best_placement ?? '—' },
+    { label: 'Avg Percentile',   value: s.avg_placement_percentile != null ? s.avg_placement_percentile.toFixed(1) + '%' : '—' },
+  ];
+  document.getElementById('mrStatCards').innerHTML = cards.map(c => `
+    <div class="stat-card">
+      <div class="stat-label">${c.label}</div>
+      <div class="stat-value" style="font-size:1.4rem;">${c.value}</div>
+    </div>
+  `).join('');
+}
+
+function renderMatchResultsCharts() {
+  const tc = themeColors();
+  const matches = (_mrData.matches || []).sort((a, b) =>
+    (a.match_date || '').localeCompare(b.match_date || '')
+  );
+
+  // ── Finish % Over Time ────────────────────────────────────────────
+  Object.keys(_mrCharts).forEach(k => { if (_mrCharts[k]) { _mrCharts[k].destroy(); delete _mrCharts[k]; } });
+
+  const pctLabels = matches.map(m => truncate(m.match_name, 20));
+  const pctVals   = matches.map(m => m.member_percent);
+
+  _mrCharts['mrPct'] = new Chart(
+    document.getElementById('mrPctChart').getContext('2d'),
+    {
+      type: 'line',
+      data: {
+        labels: pctLabels,
+        datasets: [{
+          label: 'Finish %',
+          data: pctVals,
+          borderColor: PALETTE[0],
+          backgroundColor: 'rgba(99,102,241,0.08)',
+          pointRadius: 4,
+          tension: 0.3,
+          fill: true,
+        }],
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: (items) => matches[items[0].dataIndex]?.match_name || items[0].label,
+              afterTitle: (items) => matches[items[0].dataIndex]?.match_date || '',
+              label: (item) => item.parsed.y != null ? `Finish: ${item.parsed.y.toFixed(2)}%` : '—',
+            },
+          },
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { maxRotation: 35, font: { size: 10 } } },
+          y: { min: 0, max: 105, grid: { color: tc.grid }, ticks: { callback: v => v + '%' } },
+        },
+      },
+    }
+  );
+
+  // ── Placement Rank Over Time ──────────────────────────────────────
+  const rankLabels = matches.map(m => truncate(m.match_name, 20));
+  const rankVals   = matches.map(m => m.member_placement);
+
+  _mrCharts['mrRank'] = new Chart(
+    document.getElementById('mrRankChart').getContext('2d'),
+    {
+      type: 'line',
+      data: {
+        labels: rankLabels,
+        datasets: [{
+          label: 'Placement',
+          data: rankVals,
+          borderColor: PALETTE[2],
+          backgroundColor: 'rgba(245,158,11,0.08)',
+          pointRadius: 4,
+          tension: 0.3,
+          fill: true,
+        }],
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: (items) => matches[items[0].dataIndex]?.match_name || items[0].label,
+              afterTitle: (items) => {
+                const m = matches[items[0].dataIndex];
+                return m ? `${m.match_date}  (${m.total_competitors ?? '?'} competitors)` : '';
+              },
+              label: (item) => item.parsed.y != null ? `Place: ${item.parsed.y}` : '—',
+            },
+          },
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { maxRotation: 35, font: { size: 10 } } },
+          y: {
+            grid: { color: tc.grid },
+            reverse: true,
+            ticks: { stepSize: 1 },
+            title: { display: true, text: 'Place (1 = best)' },
+          },
+        },
+      },
+    }
+  );
+
+  // ── Match Level Distribution ──────────────────────────────────────
+  const levelMap = {};
+  matches.forEach(m => {
+    const lvl = m.match_level != null ? `Level ${m.match_level}` : 'Unknown';
+    if (!levelMap[lvl]) levelMap[lvl] = [];
+    if (m.member_percent != null) levelMap[lvl].push(m.member_percent);
+  });
+  const levelLabels = Object.keys(levelMap).sort();
+  const levelVals   = levelLabels.map(l => {
+    const arr = levelMap[l];
+    return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+  });
+  const levelColors = [PALETTE[0], PALETTE[1], PALETTE[2], PALETTE[3], PALETTE[5]];
+
+  _mrCharts['mrLevel'] = new Chart(
+    document.getElementById('mrLevelChart').getContext('2d'),
+    {
+      type: 'bar',
+      data: {
+        labels: levelLabels,
+        datasets: [{
+          label: 'Avg Finish %',
+          data: levelVals,
+          backgroundColor: levelLabels.map((_, i) => levelColors[i % levelColors.length]),
+        }],
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (item) => item.parsed.y != null ? `Avg: ${item.parsed.y.toFixed(2)}%` : '—' } },
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: { min: 0, max: 105, grid: { color: tc.grid }, ticks: { callback: v => v + '%' } },
+        },
+      },
+    }
+  );
+}
+
+// ── Match History Table ────────────────────────────────────────────────
+function renderMrTable() {
+  const matches = [...(_mrData.matches || [])];
+
+  // Sort
+  matches.sort((a, b) => {
+    let av = a[_mrSortCol], bv = b[_mrSortCol];
+    if (av == null) av = _mrSortDir === 'asc' ? Infinity : -Infinity;
+    if (bv == null) bv = _mrSortDir === 'asc' ? Infinity : -Infinity;
+    if (typeof av === 'string') return _mrSortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+    return _mrSortDir === 'asc' ? av - bv : bv - av;
+  });
+
+  document.getElementById('mrTableBody').innerHTML = matches.length
+    ? matches.map(m => `<tr>
+        <td>${m.match_date || '—'}</td>
+        <td>${m.match_name || '—'}</td>
+        <td>${m.division || '—'}</td>
+        <td>${m.match_level != null ? 'L' + m.match_level : '—'}</td>
+        <td>${m.member_placement ?? '—'}</td>
+        <td>${m.total_competitors ?? '—'}</td>
+        <td class="${(m.member_percent ?? 0) >= 70 ? 'pct-up' : 'pct-down'}">${m.member_percent != null ? m.member_percent.toFixed(2) + '%' : '—'}</td>
+        <td>${m.placement_percentile != null ? m.placement_percentile.toFixed(1) + '%' : '—'}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="8" class="text-muted">No match data available.</td></tr>';
+
+  // Update sort indicators on headers
+  document.querySelectorAll('#mrTable th[data-sort]').forEach(th => {
+    th.classList.remove('asc', 'desc');
+    if (th.dataset.sort === _mrSortCol) th.classList.add(_mrSortDir);
+  });
+}
+
+// ── Table sort ────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('#mrTable th[data-sort]').forEach(th => {
+    th.addEventListener('click', () => {
+      const col = th.dataset.sort;
+      if (_mrSortCol === col) {
+        _mrSortDir = _mrSortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        _mrSortCol = col;
+        _mrSortDir = col === 'match_date' || col === 'match_name' ? 'asc' : 'asc';
+      }
+      if (_mrData) renderMrTable();
+    });
+  });
+});
 </script>
 {% endblock %}
