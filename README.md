@@ -1,6 +1,10 @@
 # sport-analytics
 
-USPSA analytics application — scrapes member data from USPSA, stores it in PostgreSQL, and serves a FastAPI + Jinja2 dashboard with Chart.js visualizations.
+USPSA analytics application — scrapes member data from USPSA and PractiScore, stores it in PostgreSQL, and serves a FastAPI + Jinja2 dashboard with Chart.js visualizations.
+
+Two dashboard tabs:
+- **Classifier Stats** — per-division classification percentages, hit factor trends, top/bottom classifiers, statistical summary
+- **Match Results** — finish % over time, placement rank over time, match level breakdown, full sortable match history (sourced from PractiScore)
 
 ## Requirements
 
@@ -89,9 +93,13 @@ The test suite covers:
 | Custom exceptions | `tests/test_exceptions.py` |
 | TTL cache | `tests/test_cache.py` |
 | Analytics engine | `tests/test_analytics_engine.py` |
-| HTML scraper (parsing only) | `tests/test_uspsa_scraper.py` |
-| Background task manager | `tests/test_task_manager.py` |
-| API routes | `tests/test_routes.py` |
+| USPSA HTML scraper (parsing only) | `tests/test_uspsa_scraper.py` |
+| USPSA match list scraper | `tests/test_uspsa_match_scraper.py` |
+| PractiScore HTML scraper (parsing only) | `tests/test_practiscore_scraper.py` |
+| Background task manager (USPSA) | `tests/test_task_manager.py` |
+| Background task manager (PractiScore) | `tests/test_task_manager_practiscore.py` |
+| API routes (classifier/dashboard) | `tests/test_routes.py` |
+| API routes (PractiScore) | `tests/test_routes_practiscore.py` |
 
 ## Architecture
 
@@ -118,10 +126,10 @@ The test suite covers:
                     │   storage)       ││ │   limiting)      │
                     └──────────────────┘│└──────────────────┘
                                         │
-                        ┌───────────────▼──────────────┐
-                        │     USPSA Website (external)  │
-                        │  Playwright + curl_cffi       │
-                        └──────────────────────────────┘
+               ┌───────────────▼──────────────┐ ┌────────────────────────────┐
+               │     USPSA Website (external)  │ │  PractiScore (external)    │
+               │  Playwright + curl_cffi       │ │  Playwright + curl_cffi    │
+               └──────────────────────────────┘ └────────────────────────────┘
 ```
 
 ## API Endpoints
@@ -132,21 +140,29 @@ The test suite covers:
 | `GET` | `/` | Home page (HTML) |
 | `GET` | `/dashboard/{member_number}` | Member dashboard (HTML) |
 | `GET` | `/api/member/{member_number}` | Member data JSON |
-| `GET` | `/api/member/{member_number}/dashboard` | Dashboard data JSON |
-| `GET` | `/api/member/{member_number}/status` | Scrape job status |
-| `POST` | `/api/analyze/{member_number}` | Trigger scrape + analysis |
+| `GET` | `/api/member/{member_number}/dashboard` | Classifier dashboard data JSON |
+| `GET` | `/api/member/{member_number}/status` | USPSA scrape job status |
+| `POST` | `/api/analyze/{member_number}` | Trigger USPSA scrape + analysis |
+| `POST` | `/api/analyze/{member_number}/practiscore` | Trigger PractiScore match scrape |
+| `GET` | `/api/member/{member_number}/practiscore` | PractiScore match results JSON |
 
 ### Example
 
 ```bash
-# Trigger analysis for a member
+# Trigger USPSA classifier analysis
 curl -X POST http://localhost:8000/api/analyze/A12345
 
 # Poll status
 curl http://localhost:8000/api/member/A12345/status
 
-# Get results
-curl http://localhost:8000/api/member/A12345
+# Get classifier results
+curl http://localhost:8000/api/member/A12345/dashboard
+
+# Trigger PractiScore match history scrape
+curl -X POST http://localhost:8000/api/analyze/A12345/practiscore
+
+# Get PractiScore match results
+curl http://localhost:8000/api/member/A12345/practiscore
 ```
 
 ## Project Structure
@@ -164,16 +180,19 @@ app/
     members.py         # /api/member/* endpoints
     pages.py           # HTML dashboard pages
   services/
-    uspsa_scraper.py   # USPSA data scraper (Playwright + curl_cffi)
-    analytics_engine.py # Classification analytics
-    cache.py           # Redis cache helpers
-    task_manager.py    # Background scrape tasks
+    uspsa_scraper.py        # USPSA classifier scraper (Playwright + curl_cffi)
+    uspsa_match_scraper.py  # Derives match list from classifier data
+    practiscore_scraper.py  # PractiScore match results scraper
+    analytics_engine.py     # Classification analytics (pandas/scipy)
+    cache.py                # In-memory TTL cache
+    task_manager.py         # Background scrape tasks (USPSA + PractiScore)
   models/              # SQLAlchemy ORM models
   templates/           # Jinja2 HTML templates
   static/              # CSS/JS assets
 alembic/               # Database migrations
   versions/
-    001_initial_schema.py
+    001_initial_schema.py   # members, divisions, classifications, classifier_results
+    002_practiscore_tables.py # practiscore_matches, practiscore_results
 Dockerfile
 docker-compose.yml
 pyproject.toml
