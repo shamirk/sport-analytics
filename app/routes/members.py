@@ -277,7 +277,7 @@ async def get_member_status(
             "job_id": jid,
         }
         if job["status"] == "error":
-            resp["error"] = job.get("error", "Unknown error")
+            resp["error"] = job.get("error_public", "Unknown error")
         return resp
 
     member = db.query(Member).filter(Member.member_number == member_number).first()

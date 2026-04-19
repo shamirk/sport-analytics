@@ -1,9 +1,16 @@
 """Unit tests for app.services.task_manager."""
 import pytest
+from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import app.services.task_manager as task_manager
-from app.services.task_manager import create_job, get_pending_job, _find_pending_job
+from app.services.task_manager import (
+    create_job,
+    get_pending_job,
+    _find_pending_job,
+    _public_error_message,
+    _cleanup_expired_jobs,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +44,8 @@ class TestCreateJob:
         job = task_manager.job_status[job_id]
         assert job["started_at"] is None
         assert job["completed_at"] is None
-        assert job["error"] is None
+        assert job["error_public"] is None
+        assert job["error_internal"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +159,7 @@ class TestScrapeAndStore:
             await task_manager.scrape_and_store("Z99999", mock_db)
 
         assert task_manager.job_status[job_id]["status"] == "error"
-        assert "Z99999" in task_manager.job_status[job_id]["error"]
+        assert "Z99999" in task_manager.job_status[job_id]["error_public"]
 
     @pytest.mark.asyncio
     async def test_generic_exception_sets_error_status(self, mock_db):
@@ -165,7 +173,8 @@ class TestScrapeAndStore:
             await task_manager.scrape_and_store("A12345", mock_db)
 
         assert task_manager.job_status[job_id]["status"] == "error"
-        assert "DB crash" in task_manager.job_status[job_id]["error"]
+        assert "DB crash" in task_manager.job_status[job_id]["error_internal"]
+        assert task_manager.job_status[job_id]["error_public"] == "An unexpected error occurred"
 
     @pytest.mark.asyncio
     async def test_generic_exception_calls_rollback(self, mock_db):
@@ -205,3 +214,152 @@ class TestScrapeAndStore:
             await task_manager.scrape_and_store("A12345", mock_db)
 
         assert cache.get("analyze:A12345") == _MOCK_SCRAPE_DATA
+
+    @pytest.mark.asyncio
+    async def test_db_integrity_error_sets_safe_public_message(self, mock_db):
+        from sqlalchemy.exc import IntegrityError
+
+        job_id = create_job("A12345")
+        mock_db.commit.side_effect = IntegrityError("stmt", {}, Exception("unique violation"))
+
+        with patch("app.services.uspsa_scraper.USPSAScraper") as MockScraper:
+            mock_instance = MockScraper.return_value
+            mock_instance.scrape_member = AsyncMock(return_value=_MOCK_SCRAPE_DATA)
+
+            await task_manager.scrape_and_store("A12345", mock_db)
+
+        assert task_manager.job_status[job_id]["status"] == "error"
+        assert task_manager.job_status[job_id]["error_public"] == "Data processing error, please retry"
+        assert "unique violation" in task_manager.job_status[job_id]["error_internal"]
+
+    @pytest.mark.asyncio
+    async def test_scraping_error_sets_scraping_public_message(self, mock_db):
+        from app.exceptions import ScrapingError
+
+        job_id = create_job("A12345")
+
+        with patch("app.services.uspsa_scraper.USPSAScraper") as MockScraper:
+            mock_instance = MockScraper.return_value
+            mock_instance.scrape_member = AsyncMock(
+                side_effect=ScrapingError("Cloudflare blocked", status_code=403)
+            )
+
+            await task_manager.scrape_and_store("A12345", mock_db)
+
+        assert task_manager.job_status[job_id]["status"] == "error"
+        assert task_manager.job_status[job_id]["error_public"] == "Scraping failed, please retry"
+
+    @pytest.mark.asyncio
+    async def test_timeout_error_sets_timeout_public_message(self, mock_db):
+        job_id = create_job("A12345")
+
+        with patch("app.services.uspsa_scraper.USPSAScraper") as MockScraper:
+            mock_instance = MockScraper.return_value
+            mock_instance.scrape_member = AsyncMock(side_effect=TimeoutError("request timed out"))
+
+            await task_manager.scrape_and_store("A12345", mock_db)
+
+        assert task_manager.job_status[job_id]["status"] == "error"
+        assert task_manager.job_status[job_id]["error_public"] == "Request timed out, please retry"
+
+    @pytest.mark.asyncio
+    async def test_error_internal_never_surfaces_in_public(self, mock_db):
+        """Sensitive details in the exception must not appear in error_public."""
+        job_id = create_job("A12345")
+        secret_detail = "DETAIL: Key (member_number)=(A12345) already exists."
+        mock_db.commit.side_effect = RuntimeError(secret_detail)
+
+        with patch("app.services.uspsa_scraper.USPSAScraper") as MockScraper:
+            mock_instance = MockScraper.return_value
+            mock_instance.scrape_member = AsyncMock(return_value=_MOCK_SCRAPE_DATA)
+
+            await task_manager.scrape_and_store("A12345", mock_db)
+
+        assert secret_detail not in task_manager.job_status[job_id]["error_public"]
+        assert secret_detail in task_manager.job_status[job_id]["error_internal"]
+
+
+# ---------------------------------------------------------------------------
+# _public_error_message
+# ---------------------------------------------------------------------------
+
+
+class TestPublicErrorMessage:
+    def test_sqlalchemy_integrity_error(self):
+        from sqlalchemy.exc import IntegrityError
+        exc = IntegrityError("stmt", {}, Exception("unique violation"))
+        assert _public_error_message(exc) == "Data processing error, please retry"
+
+    def test_scraping_error(self):
+        from app.exceptions import ScrapingError
+        exc = ScrapingError("Cloudflare blocked", status_code=403)
+        assert _public_error_message(exc) == "Scraping failed, please retry"
+
+    def test_rate_limit_error(self):
+        from app.exceptions import RateLimitError
+        exc = RateLimitError("rate limited")
+        assert _public_error_message(exc) == "Scraping failed, please retry"
+
+    def test_timeout_error(self):
+        assert _public_error_message(TimeoutError("timed out")) == "Request timed out, please retry"
+
+    def test_generic_runtime_error(self):
+        assert _public_error_message(RuntimeError("DB crash")) == "An unexpected error occurred"
+
+    def test_generic_value_error(self):
+        assert _public_error_message(ValueError("bad value")) == "An unexpected error occurred"
+
+
+# ---------------------------------------------------------------------------
+# _cleanup_expired_jobs
+# ---------------------------------------------------------------------------
+
+
+class TestCleanupExpiredJobs:
+    def test_removes_complete_jobs_older_than_ttl(self):
+        job_id = create_job("A12345")
+        task_manager.job_status[job_id]["status"] = "complete"
+        old_ts = (datetime.now(timezone.utc) - timedelta(seconds=task_manager._JOB_TTL_SECONDS + 1)).isoformat()
+        task_manager.job_status[job_id]["completed_at"] = old_ts
+
+        _cleanup_expired_jobs()
+
+        assert job_id not in task_manager.job_status
+
+    def test_removes_error_jobs_older_than_ttl(self):
+        job_id = create_job("A12345")
+        task_manager.job_status[job_id]["status"] = "error"
+        old_ts = (datetime.now(timezone.utc) - timedelta(seconds=task_manager._JOB_TTL_SECONDS + 1)).isoformat()
+        task_manager.job_status[job_id]["completed_at"] = old_ts
+
+        _cleanup_expired_jobs()
+
+        assert job_id not in task_manager.job_status
+
+    def test_keeps_recent_terminal_jobs(self):
+        job_id = create_job("A12345")
+        task_manager.job_status[job_id]["status"] = "complete"
+        task_manager.job_status[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+        _cleanup_expired_jobs()
+
+        assert job_id in task_manager.job_status
+
+    def test_keeps_pending_jobs_regardless_of_age(self):
+        job_id = create_job("A12345")
+        old_ts = (datetime.now(timezone.utc) - timedelta(seconds=task_manager._JOB_TTL_SECONDS + 1)).isoformat()
+        task_manager.job_status[job_id]["completed_at"] = old_ts
+
+        _cleanup_expired_jobs()
+
+        assert job_id in task_manager.job_status
+
+    def test_cleanup_called_on_create_job(self):
+        job_id = create_job("A12345")
+        task_manager.job_status[job_id]["status"] = "complete"
+        old_ts = (datetime.now(timezone.utc) - timedelta(seconds=task_manager._JOB_TTL_SECONDS + 1)).isoformat()
+        task_manager.job_status[job_id]["completed_at"] = old_ts
+
+        create_job("B99999")  # triggers cleanup
+
+        assert job_id not in task_manager.job_status
