@@ -1,4 +1,8 @@
 """Unit tests for app.services.uspsa_scraper — HTML parsing only (no network)."""
+import time
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import app.services.uspsa_scraper as scraper_mod
 import pytest
 from bs4 import BeautifulSoup
 
@@ -318,3 +322,131 @@ class TestUSPSAScraperParsePage:
         scraper = USPSAScraper()
         result = scraper._parse_page(_CLASSIFICATIONS_HTML, "A12345")
         assert result["match_results"] == []
+
+
+# ---------------------------------------------------------------------------
+# Playwright semaphore, browser singleton, and circuit breaker
+# ---------------------------------------------------------------------------
+
+
+class TestPlaywrightSemaphore:
+    def test_semaphore_limit_is_three(self):
+        assert scraper_mod._playwright_semaphore._value == 3
+
+
+class TestPlaywrightBrowserSingleton:
+    def setup_method(self):
+        self._orig_browser = scraper_mod._playwright_browser
+        self._orig_pw = scraper_mod._playwright_pw
+        scraper_mod._playwright_browser = None
+        scraper_mod._playwright_pw = None
+
+    def teardown_method(self):
+        scraper_mod._playwright_browser = self._orig_browser
+        scraper_mod._playwright_pw = self._orig_pw
+
+    async def test_reuses_existing_connected_browser(self):
+        mock_browser = MagicMock()
+        mock_browser.is_connected = MagicMock(return_value=True)
+        scraper_mod._playwright_browser = mock_browser
+
+        result = await scraper_mod._get_or_create_playwright_browser()
+        assert result is mock_browser
+
+    async def test_creates_browser_when_none_exists(self):
+        mock_browser = MagicMock()
+        mock_pw_instance = MagicMock()
+        mock_pw_instance.chromium = MagicMock()
+        mock_pw_instance.chromium.launch = AsyncMock(return_value=mock_browser)
+        mock_pw_obj = MagicMock()
+        mock_pw_obj.start = AsyncMock(return_value=mock_pw_instance)
+
+        with patch("playwright.async_api.async_playwright", return_value=mock_pw_obj):
+            result = await scraper_mod._get_or_create_playwright_browser()
+
+        assert result is mock_browser
+
+    async def test_recreates_browser_when_disconnected(self):
+        old_browser = MagicMock()
+        old_browser.is_connected = MagicMock(return_value=False)
+        old_pw = AsyncMock()
+        scraper_mod._playwright_browser = old_browser
+        scraper_mod._playwright_pw = old_pw
+
+        new_browser = MagicMock()
+        mock_pw_instance = MagicMock()
+        mock_pw_instance.chromium = MagicMock()
+        mock_pw_instance.chromium.launch = AsyncMock(return_value=new_browser)
+        mock_pw_obj = MagicMock()
+        mock_pw_obj.start = AsyncMock(return_value=mock_pw_instance)
+
+        with patch("playwright.async_api.async_playwright", return_value=mock_pw_obj):
+            result = await scraper_mod._get_or_create_playwright_browser()
+
+        assert result is new_browser
+        old_pw.stop.assert_awaited_once()
+
+
+class TestPlaywrightCircuitBreaker:
+    def setup_method(self):
+        self._orig_failures = scraper_mod._playwright_consecutive_failures
+        self._orig_open_until = scraper_mod._playwright_circuit_open_until
+        scraper_mod._playwright_consecutive_failures = 0
+        scraper_mod._playwright_circuit_open_until = 0.0
+
+    def teardown_method(self):
+        scraper_mod._playwright_consecutive_failures = self._orig_failures
+        scraper_mod._playwright_circuit_open_until = self._orig_open_until
+
+    async def test_raises_immediately_when_circuit_open(self):
+        scraper_mod._playwright_circuit_open_until = time.monotonic() + 60.0
+        scraper = USPSAScraper()
+        with pytest.raises(RuntimeError, match="circuit breaker open"):
+            await scraper._fetch_with_playwright("https://uspsa.org/classification/A00001")
+
+    async def test_circuit_opens_after_three_cf_timeouts(self):
+        from playwright.async_api import TimeoutError as PWTimeout
+
+        mock_page = AsyncMock()
+        mock_page.goto = AsyncMock(return_value=MagicMock(status=200))
+        mock_page.wait_for_function = AsyncMock(side_effect=PWTimeout("timeout"))
+        mock_page.content = AsyncMock(return_value="<html></html>")
+        mock_page.close = AsyncMock()
+
+        mock_browser = MagicMock()
+        mock_browser.new_page = AsyncMock(return_value=mock_page)
+
+        scraper = USPSAScraper()
+        url = "https://uspsa.org/classification/A00001"
+
+        with patch(
+            "app.services.uspsa_scraper._get_or_create_playwright_browser",
+            AsyncMock(return_value=mock_browser),
+        ):
+            for _ in range(3):
+                await scraper._fetch_with_playwright(url)
+
+        assert scraper_mod._playwright_circuit_open_until > time.monotonic()
+
+    async def test_consecutive_failures_reset_on_success(self):
+        scraper_mod._playwright_consecutive_failures = 2
+
+        mock_page = AsyncMock()
+        mock_page.goto = AsyncMock(return_value=MagicMock(status=200))
+        mock_page.wait_for_function = AsyncMock(return_value=None)
+        mock_page.content = AsyncMock(return_value="<html>content</html>")
+        mock_page.close = AsyncMock()
+
+        mock_browser = MagicMock()
+        mock_browser.new_page = AsyncMock(return_value=mock_page)
+
+        scraper = USPSAScraper()
+        url = "https://uspsa.org/classification/A00001"
+
+        with patch(
+            "app.services.uspsa_scraper._get_or_create_playwright_browser",
+            AsyncMock(return_value=mock_browser),
+        ):
+            await scraper._fetch_with_playwright(url)
+
+        assert scraper_mod._playwright_consecutive_failures == 0
