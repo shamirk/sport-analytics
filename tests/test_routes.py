@@ -273,7 +273,7 @@ class TestGetMemberStatus:
     def test_error_status_includes_error_message(self, client):
         job_id = task_manager.create_job("A12345")
         task_manager.job_status[job_id]["status"] = "error"
-        task_manager.job_status[job_id]["error"] = "member not found"
+        task_manager.job_status[job_id]["error_public"] = "member not found"
 
         resp = client.get("/api/member/A12345/status")
         body = resp.json()

@@ -12,8 +12,45 @@ from app.services.cache import cache
 
 logger = structlog.get_logger(__name__)
 
-# job_id -> {status, member_number, started_at, completed_at, error, job_type}
+# job_id -> {status, member_number, started_at, completed_at, error_public, error_internal, job_type}
 job_status: dict[str, dict[str, Any]] = {}
+
+_JOB_TTL_SECONDS = 3600  # remove terminal jobs after 1 hour
+
+
+def _public_error_message(exc: Exception) -> str:
+    """Return a safe user-facing message for *exc*; never expose internals."""
+    try:
+        from sqlalchemy.exc import IntegrityError as _SAIntegrityError
+        if isinstance(exc, _SAIntegrityError):
+            return "Data processing error, please retry"
+    except ImportError:
+        pass
+
+    try:
+        from app.exceptions import RateLimitError, ScrapingError
+        if isinstance(exc, (ScrapingError, RateLimitError)):
+            return "Scraping failed, please retry"
+    except ImportError:
+        pass
+
+    if "timeout" in type(exc).__name__.lower():
+        return "Request timed out, please retry"
+
+    return "An unexpected error occurred"
+
+
+def _cleanup_expired_jobs() -> None:
+    """Remove terminal jobs whose completed_at is older than _JOB_TTL_SECONDS."""
+    now = datetime.now(timezone.utc)
+    expired = [
+        jid for jid, job in job_status.items()
+        if job["status"] in ("complete", "error")
+        and job.get("completed_at")
+        and (now - datetime.fromisoformat(job["completed_at"])).total_seconds() > _JOB_TTL_SECONDS
+    ]
+    for jid in expired:
+        del job_status[jid]
 
 
 async def scrape_and_store(member_number: str, db_session: Any) -> None:
@@ -126,13 +163,15 @@ async def scrape_and_store(member_number: str, db_session: Any) -> None:
 
     except MemberNotFoundError:
         job_status[job_id]["status"] = "error"
-        job_status[job_id]["error"] = f"Member {member_number} not found in USPSA"
+        job_status[job_id]["error_public"] = f"Member {member_number} not found in USPSA"
+        job_status[job_id]["error_internal"] = f"MemberNotFoundError: {member_number}"
         job_status[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
         logger.warning("member_not_found", job_id=job_id, member_number=member_number)
     except Exception as exc:
         db_session.rollback()
         job_status[job_id]["status"] = "error"
-        job_status[job_id]["error"] = str(exc)
+        job_status[job_id]["error_public"] = _public_error_message(exc)
+        job_status[job_id]["error_internal"] = str(exc)
         job_status[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
         logger.error("scrape_failed", job_id=job_id, member_number=member_number, error=str(exc))
 
@@ -222,7 +261,8 @@ async def scrape_practiscore_and_store(member_number: str, db_session: Any) -> N
     except Exception as exc:
         db_session.rollback()
         job_status[job_id]["status"] = "error"
-        job_status[job_id]["error"] = str(exc)
+        job_status[job_id]["error_public"] = _public_error_message(exc)
+        job_status[job_id]["error_internal"] = str(exc)
         job_status[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
         logger.error(
             "practiscore_scrape_failed",
@@ -244,6 +284,7 @@ def _parse_iso_date(date_str: str | None):
 
 def create_job(member_number: str, job_type: str = "uspsa") -> str:
     """Register a new pending job and return its job_id."""
+    _cleanup_expired_jobs()
     job_id = str(uuid.uuid4())
     job_status[job_id] = {
         "status": "pending",
@@ -251,7 +292,8 @@ def create_job(member_number: str, job_type: str = "uspsa") -> str:
         "job_type": job_type,
         "started_at": None,
         "completed_at": None,
-        "error": None,
+        "error_public": None,
+        "error_internal": None,
     }
     return job_id
 

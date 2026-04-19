@@ -161,7 +161,8 @@ class TestScrapePractiscoreAndStore:
             await task_manager.scrape_practiscore_and_store("A12345", mock_db)
 
         assert task_manager.job_status[job_id]["status"] == "error"
-        assert "DB failure" in task_manager.job_status[job_id]["error"]
+        assert "DB failure" in task_manager.job_status[job_id]["error_internal"]
+        assert task_manager.job_status[job_id]["error_public"] == "An unexpected error occurred"
 
     @pytest.mark.asyncio
     async def test_exception_calls_rollback(self, mock_db):
