@@ -211,7 +211,32 @@ alembic revision --autogenerate -m "description"
 alembic downgrade -1
 ```
 
+## Security
+
+The following security measures are in place:
+
+- **XSS**: All scraped data rendered in `dashboard.html` is escaped via `escapeHtml()` before insertion into the DOM.
+- **SSRF**: `practiscore_scraper.py` validates URLs against a `practiscore.com` allowlist before fetching.
+- **Docker network**: PostgreSQL and Redis ports are no longer published on `0.0.0.0`; Redis requires a password (`REDIS_PASSWORD`).
+- **Credentials**: `.env.example` uses unambiguous angle-bracket placeholders (e.g. `<set-strong-password>`) — none of the defaults are valid credentials.
+- **Rate limiting**: The rate-limiter key function is `X-Forwarded-For`-aware to prevent bypass behind a proxy.
+- **Security headers**: Responses include `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, and `Referrer-Policy`.
+- **SRI**: CDN-loaded scripts carry `integrity` hashes to prevent tampering.
+- **Playwright concurrency**: `asyncio.Semaphore` limits concurrent browser instances to 3.
+- **Error handling**: The job-status API returns sanitized messages only — internal errors are not leaked to clients.
+- **Dependencies**: `uv` lockfile committed for reproducible installs; `psycopg2-binary` replaced with `psycopg2`.
+
 ## Deployment
+
+### Before you start
+
+Copy `.env.example` to `.env` and replace **every** angle-bracket placeholder with a real value before running:
+
+```bash
+cp .env.example .env
+# Edit .env — replace <set-strong-password>, <generate-with-openssl-rand-hex-32>, etc.
+openssl rand -hex 32   # generate a value for SECRET_KEY
+```
 
 ### Render
 
@@ -219,14 +244,14 @@ alembic downgrade -1
 2. Set **Build Command**: `pip install -e .`
 3. Set **Start Command**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 4. Add a **PostgreSQL** database and a **Redis** instance from the Render dashboard.
-5. Set environment variables (copy from `.env.example`), using the Render-provided `DATABASE_URL` and `REDIS_URL`.
+5. Set environment variables (copy from `.env.example`), replacing all placeholders with the Render-provided `DATABASE_URL`, `REDIS_URL`, and a generated `SECRET_KEY`.
 6. After first deploy, run migrations via the Render shell: `alembic upgrade head`
 
 ### Railway
 
 1. Create a new project, add a **GitHub** service pointing at this repo.
 2. Add **PostgreSQL** and **Redis** plugins.
-3. Set environment variables from `.env.example`, using the Railway-provided connection strings.
+3. Set environment variables from `.env.example`, replacing all placeholders with the Railway-provided connection strings and a generated `SECRET_KEY`.
 4. Railway auto-detects `Dockerfile` — no build command override needed.
 5. Run migrations via the Railway shell or add to your start command:
    ```
