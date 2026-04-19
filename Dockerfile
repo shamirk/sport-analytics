@@ -7,12 +7,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml .
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir uv
+
+ENV UV_SYSTEM_PYTHON=1
+
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-install-project
 
 RUN playwright install chromium --with-deps
 
 COPY app/ ./app/
+RUN uv sync --frozen
 
 RUN useradd --system --no-create-home appuser && chown -R appuser /code
 USER appuser
