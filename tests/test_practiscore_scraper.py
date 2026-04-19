@@ -1,11 +1,13 @@
 """Unit tests for app.services.practiscore_scraper — HTML parsing only (no network)."""
 import pytest
 from bs4 import BeautifulSoup
+from unittest.mock import AsyncMock, patch
 
 from app.services.practiscore_scraper import (
     _col_map,
     _enrich_with_results,
     _extract_match_id,
+    _fetch_with_fallback,
     _find_date_in_text,
     _find_results_table,
     _is_cf_challenge,
@@ -14,6 +16,7 @@ from app.services.practiscore_scraper import (
     _parse_member_match_list,
     _safe_float,
     _safe_int,
+    _validate_url,
 )
 
 
@@ -366,3 +369,149 @@ class TestEnrichWithResults:
         # No table found → results unchanged, total_competitors not set
         assert entry["results"] == []
         assert entry.get("total_competitors") is None
+
+
+# ---------------------------------------------------------------------------
+# _validate_url — SSRF guard
+# ---------------------------------------------------------------------------
+
+
+class TestValidateUrl:
+    def test_accepts_practiscore_https(self):
+        assert _validate_url("https://practiscore.com/results/new/abc-123") is True
+
+    def test_accepts_www_practiscore_https(self):
+        assert _validate_url("https://www.practiscore.com/results/new/abc-123") is True
+
+    def test_accepts_practiscore_http(self):
+        assert _validate_url("http://practiscore.com/results/new/abc-123") is True
+
+    def test_rejects_imds(self):
+        assert _validate_url("http://169.254.169.254/latest/meta-data/") is False
+
+    def test_rejects_localhost(self):
+        assert _validate_url("http://localhost/admin") is False
+
+    def test_rejects_localhost_127(self):
+        assert _validate_url("http://127.0.0.1/secret") is False
+
+    def test_rejects_internal_service(self):
+        assert _validate_url("http://redis:6379/") is False
+
+    def test_rejects_unknown_domain(self):
+        assert _validate_url("https://evil.com/steal") is False
+
+    def test_rejects_ftp_scheme(self):
+        assert _validate_url("ftp://practiscore.com/file") is False
+
+    def test_rejects_file_scheme(self):
+        assert _validate_url("file:///etc/passwd") is False
+
+    def test_rejects_empty_string(self):
+        assert _validate_url("") is False
+
+    def test_rejects_relative_url(self):
+        assert _validate_url("/results/new/abc") is False
+
+    def test_rejects_practiscore_subdomain_bypass(self):
+        assert _validate_url("https://evil.practiscore.com.attacker.net/x") is False
+
+
+# ---------------------------------------------------------------------------
+# SSRF: _parse_member_match_list rejects off-host hrefs
+# ---------------------------------------------------------------------------
+
+
+_SSRF_MEMBER_MATCH_HTML = """
+<html><body>
+<table>
+  <tr><th>Match Name</th><th>Date</th><th>Division</th><th>Level</th><th>Place</th><th>Pct</th></tr>
+  <tr>
+    <td><a href="http://169.254.169.254/latest/meta-data/">IMDS Attack</a></td>
+    <td>03/15/2024</td><td>Limited</td><td>2</td><td>5</td><td>84.50</td>
+  </tr>
+  <tr>
+    <td><a href="https://practiscore.com/results/new/legit-111">Legit Match</a></td>
+    <td>06/01/2024</td><td>Limited</td><td>2</td><td>3</td><td>91.20</td>
+  </tr>
+</table>
+</body></html>
+"""
+
+
+class TestParseMemberMatchListSsrf:
+    def test_malicious_href_source_url_is_none(self):
+        matches = _parse_member_match_list(_SSRF_MEMBER_MATCH_HTML, "A12345")
+        by_name = {m["match_name"]: m for m in matches}
+        assert by_name["IMDS Attack"]["source_url"] is None
+
+    def test_malicious_href_match_id_is_none(self):
+        matches = _parse_member_match_list(_SSRF_MEMBER_MATCH_HTML, "A12345")
+        by_name = {m["match_name"]: m for m in matches}
+        assert by_name["IMDS Attack"]["practiscore_match_id"] is None
+
+    def test_legit_href_still_parsed(self):
+        matches = _parse_member_match_list(_SSRF_MEMBER_MATCH_HTML, "A12345")
+        by_name = {m["match_name"]: m for m in matches}
+        assert by_name["Legit Match"]["source_url"] == "https://practiscore.com/results/new/legit-111"
+
+
+# ---------------------------------------------------------------------------
+# SSRF: _parse_match_list_from_links rejects off-host hrefs
+# ---------------------------------------------------------------------------
+
+
+_SSRF_LINKS_HTML = """
+<html><body>
+<ul>
+  <li><a href="http://127.0.0.1:8080/results/new/internal-attack">Internal</a></li>
+  <li><a href="/results/new/legit-789">Legit Match</a> — 09/20/2024</li>
+</ul>
+</body></html>
+"""
+
+
+class TestParseMatchListFromLinksSsrf:
+    def test_ssrf_href_excluded(self):
+        soup = BeautifulSoup(_SSRF_LINKS_HTML, "html.parser")
+        matches = _parse_match_list_from_links(soup, "A12345")
+        urls = [m["source_url"] for m in matches]
+        assert not any("127.0.0.1" in (u or "") for u in urls)
+
+    def test_legit_relative_href_accepted(self):
+        soup = BeautifulSoup(_SSRF_LINKS_HTML, "html.parser")
+        matches = _parse_match_list_from_links(soup, "A12345")
+        assert len(matches) == 1
+        assert "legit-789" in matches[0]["source_url"]
+
+
+# ---------------------------------------------------------------------------
+# SSRF: _fetch_with_fallback blocks disallowed URLs
+# ---------------------------------------------------------------------------
+
+
+class TestFetchWithFallbackSsrf:
+    @pytest.mark.asyncio
+    async def test_blocks_imds_url(self):
+        result = await _fetch_with_fallback("http://169.254.169.254/latest/meta-data/")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_blocks_localhost(self):
+        result = await _fetch_with_fallback("http://localhost/admin")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_blocks_unknown_domain(self):
+        result = await _fetch_with_fallback("https://evil.com/steal")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_allows_practiscore_url(self):
+        with patch(
+            "app.services.practiscore_scraper._fetch_curl_cffi",
+            new_callable=AsyncMock,
+            return_value="<html>match results</html>",
+        ):
+            result = await _fetch_with_fallback("https://practiscore.com/results/new/abc-123")
+        assert result == "<html>match results</html>"
