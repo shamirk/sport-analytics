@@ -22,6 +22,7 @@ import asyncio
 import re
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import structlog
 from bs4 import BeautifulSoup, Tag
@@ -30,6 +31,16 @@ logger = structlog.get_logger(__name__)
 
 PS_MEMBER_URL = "https://practiscore.com/results/new/by-member-number/{member_number}"
 _CF_MARKERS = ("just a moment", "checking your browser", "enable javascript")
+_ALLOWED_HOSTS = frozenset({"practiscore.com", "www.practiscore.com"})
+
+
+def _validate_url(url: str) -> bool:
+    """Return True only if url uses http/https and targets an allowed host."""
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    return parsed.scheme in ("http", "https") and parsed.netloc in _ALLOWED_HOSTS
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +104,9 @@ async def scrape_member_matches(member_number: str) -> list[dict]:
 
 async def _fetch_with_fallback(url: str) -> str | None:
     """Try curl_cffi first, then Playwright."""
+    if not _validate_url(url):
+        logger.warning("practiscore_blocked_url", url=url)
+        return None
     try:
         html = await _fetch_curl_cffi(url)
         if html and not _is_cf_challenge(html):
@@ -220,8 +234,11 @@ def _parse_member_match_list(html: str, member_number: str) -> list[dict]:
                 href = str(link["href"])
                 if href.startswith("/"):
                     href = "https://practiscore.com" + href
-                source_url = href
-                ps_match_id = _extract_match_id(href)
+                if _validate_url(href):
+                    source_url = href
+                    ps_match_id = _extract_match_id(href)
+                else:
+                    logger.warning("practiscore_blocked_href", href=href)
 
             if not match_name:
                 continue
@@ -285,6 +302,9 @@ def _parse_match_list_from_links(soup: BeautifulSoup, member_number: str) -> lis
             continue
         if href.startswith("/"):
             href = "https://practiscore.com" + href
+        if not _validate_url(href):
+            logger.warning("practiscore_blocked_href", href=href)
+            continue
         ps_id = _extract_match_id(href)
         if not ps_id or ps_id in seen:
             continue
