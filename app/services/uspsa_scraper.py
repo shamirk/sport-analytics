@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -13,6 +14,36 @@ from bs4 import BeautifulSoup
 logger = structlog.get_logger(__name__)
 
 BASE_URL = "https://uspsa.org/classification/{member_number}"
+
+# Caps concurrent Playwright browser instances to 3 to prevent CPU/RAM DoS
+_playwright_semaphore = asyncio.Semaphore(3)
+
+# Browser singleton — shared across requests; recreated if browser crashes
+_playwright_browser_lock = asyncio.Lock()
+_playwright_pw: Any = None
+_playwright_browser: Any = None
+
+# Circuit breaker: after 3 consecutive Cloudflare timeouts, skip Playwright for 60s
+_playwright_consecutive_failures: int = 0
+_playwright_circuit_open_until: float = 0.0
+_PLAYWRIGHT_FAILURE_THRESHOLD = 3
+_PLAYWRIGHT_COOLDOWN_SECONDS = 60
+
+
+async def _get_or_create_playwright_browser() -> Any:
+    """Return the shared Playwright browser, creating or recreating it if disconnected."""
+    global _playwright_pw, _playwright_browser
+    async with _playwright_browser_lock:
+        if _playwright_browser is None or not _playwright_browser.is_connected():
+            from playwright.async_api import async_playwright
+            if _playwright_pw is not None:
+                try:
+                    await _playwright_pw.stop()
+                except Exception:
+                    pass
+            _playwright_pw = await async_playwright().start()
+            _playwright_browser = await _playwright_pw.chromium.launch(headless=True)
+    return _playwright_browser
 
 
 class MemberNotFoundError(Exception):
@@ -96,19 +127,32 @@ class USPSAScraper:
             return response.text
 
     async def _fetch_with_playwright(self, url: str) -> str:
-        from playwright.async_api import async_playwright, TimeoutError as PWTimeout
+        global _playwright_consecutive_failures, _playwright_circuit_open_until
+
+        from playwright.async_api import TimeoutError as PWTimeout
+
+        # Circuit breaker: bail out fast if CF has been blocking us repeatedly
+        now = time.monotonic()
+        if _playwright_circuit_open_until > 0 and now < _playwright_circuit_open_until:
+            remaining = _playwright_circuit_open_until - now
+            self.log.warning("playwright_circuit_open", cooldown_remaining_s=remaining)
+            raise RuntimeError(
+                f"Playwright circuit breaker open ({remaining:.0f}s remaining): "
+                "too many consecutive Cloudflare challenge timeouts"
+            )
 
         self.log.debug("fetch_playwright", url=url)
-        async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=True)
-            try:
-                page = await browser.new_page(
-                    user_agent=(
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/120.0.0.0 Safari/537.36"
-                    )
+        async with _playwright_semaphore:
+            browser = await _get_or_create_playwright_browser()
+            page = await browser.new_page(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
                 )
+            )
+            cloudflare_timeout = False
+            try:
                 response = await page.goto(url, wait_until="networkidle", timeout=self.timeout * 1000)
                 if response and response.status == 404:
                     member_number = _extract_member_number(url)
@@ -123,10 +167,30 @@ class USPSAScraper:
                     )
                 except PWTimeout:
                     self.log.warning("cloudflare_challenge_timeout", url=url)
+                    cloudflare_timeout = True
 
-                return await page.content()
+                content = await page.content()
             finally:
-                await browser.close()
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+
+        # Update circuit breaker state (only reached on success or CF timeout, not on exceptions)
+        if cloudflare_timeout:
+            _playwright_consecutive_failures += 1
+            if _playwright_consecutive_failures >= _PLAYWRIGHT_FAILURE_THRESHOLD:
+                _playwright_circuit_open_until = time.monotonic() + _PLAYWRIGHT_COOLDOWN_SECONDS
+                self.log.error(
+                    "playwright_circuit_opened",
+                    consecutive_failures=_playwright_consecutive_failures,
+                    cooldown_s=_PLAYWRIGHT_COOLDOWN_SECONDS,
+                )
+                _playwright_consecutive_failures = 0
+        else:
+            _playwright_consecutive_failures = 0
+
+        return content
 
     def _parse_page(self, html: str, member_number: str) -> dict:
         soup = BeautifulSoup(html, "html.parser")
