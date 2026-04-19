@@ -2,6 +2,7 @@
 .claude/commands/
 .logs/
 .beads/
+issues.jsonl
 
 # Python
 __pycache__/
