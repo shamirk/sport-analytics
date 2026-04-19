@@ -469,6 +469,10 @@ function classBadge(cls) {
 function fmtPct(v) { return v != null ? v.toFixed(2) + '%' : '—'; }
 function fmtHF(v)  { return v != null ? v.toFixed(4) : '—'; }
 function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + '…' : (s || ''); }
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 
 const PALETTE = ['#6366f1','#22c55e','#f59e0b','#ef4444','#a855f7','#06b6d4','#f97316','#84cc16'];
 
@@ -634,7 +638,7 @@ function populateGlobalDivFilter() {
 
   const sel = document.getElementById('globalDivisionFilter');
   sel.innerHTML = allDivs.map(d =>
-    `<option value="${d}"${d === _globalDivision ? ' selected' : ''}>${d}</option>`
+    `<option value="${escapeHtml(d)}"${d === _globalDivision ? ' selected' : ''}>${escapeHtml(d)}</option>`
   ).join('');
 }
 
@@ -669,8 +673,8 @@ function renderOverview() {
 
   document.getElementById('overviewStats').innerHTML = cards.map(c => `
     <div class="stat-card">
-      <div class="stat-label">${c.label}</div>
-      <div class="stat-value" style="font-size:1.25rem;">${c.value}</div>
+      <div class="stat-label">${escapeHtml(c.label)}</div>
+      <div class="stat-value" style="font-size:1.25rem;">${escapeHtml(c.value)}</div>
     </div>
   `).join('');
 
@@ -1000,8 +1004,8 @@ function renderClassifierBreakdown() {
     const pctClass = isTop ? 'pct-up' : 'pct-down';
     return `<tr>
       <td class="num-rank">${i+1}</td>
-      <td>${c.classifier_number}${c.classifier_name ? '<br><span class="text-muted" style="font-size:0.7rem;">' + c.classifier_name + '</span>' : ''}</td>
-      <td>${c.division}</td>
+      <td>${escapeHtml(c.classifier_number)}${c.classifier_name ? '<br><span class="text-muted" style="font-size:0.7rem;">' + escapeHtml(c.classifier_name) + '</span>' : ''}</td>
+      <td>${escapeHtml(c.division)}</td>
       <td class="${pctClass}">${fmtPct(c.percentage)}</td>
     </tr>`;
   }
@@ -1090,9 +1094,9 @@ function renderStats() {
 
   document.getElementById('statsGrid').innerHTML = stats.map(s => `
     <div class="stat-card">
-      <div class="stat-label">${s.label}</div>
-      <div class="stat-value" style="font-size:1.5rem;">${s.value}</div>
-      <div class="stat-sub">${s.sub}</div>
+      <div class="stat-label">${escapeHtml(s.label)}</div>
+      <div class="stat-value" style="font-size:1.5rem;">${escapeHtml(s.value)}</div>
+      <div class="stat-sub">${escapeHtml(s.sub)}</div>
     </div>
   `).join('');
 }
@@ -1312,8 +1316,8 @@ function renderMrStatCards() {
   ];
   document.getElementById('mrStatCards').innerHTML = cards.map(c => `
     <div class="stat-card">
-      <div class="stat-label">${c.label}</div>
-      <div class="stat-value" style="font-size:1.4rem;">${c.value}</div>
+      <div class="stat-label">${escapeHtml(c.label)}</div>
+      <div class="stat-value" style="font-size:1.4rem;">${escapeHtml(c.value)}</div>
     </div>
   `).join('');
 }
@@ -1470,9 +1474,9 @@ function renderMrTable() {
 
   document.getElementById('mrTableBody').innerHTML = matches.length
     ? matches.map(m => `<tr>
-        <td>${m.match_date || '—'}</td>
-        <td>${m.match_name || '—'}</td>
-        <td>${m.division || '—'}</td>
+        <td>${escapeHtml(m.match_date) || '—'}</td>
+        <td>${escapeHtml(m.match_name) || '—'}</td>
+        <td>${escapeHtml(m.division) || '—'}</td>
         <td>${m.match_level != null ? 'L' + m.match_level : '—'}</td>
         <td>${m.member_placement ?? '—'}</td>
         <td>${m.total_competitors ?? '—'}</td>
