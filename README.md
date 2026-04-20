@@ -30,59 +30,58 @@ docker compose exec app alembic upgrade head
 ## Local Development
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+# Install dependencies (requires uv: https://docs.astral.sh/uv/)
+uv sync
 
 # Start postgres + redis only
 docker compose up postgres redis -d
 
-# Set DATABASE_URL for local postgres
-export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/uspsa_analytics
-export REDIS_URL=redis://localhost:6379/0
+# Set env vars for local postgres (use the passwords you set in .env)
+export DATABASE_URL=postgresql://<user>:<password>@localhost:5432/uspsa_analytics
+export REDIS_URL=redis://:<redis-password>@localhost:6379/0
 
 alembic upgrade head
-uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
 
 ## Environment Variables
 
-| Variable | Default | Description |
-|---|---|---|
-| `DATABASE_URL` | required | PostgreSQL connection string |
-| `POSTGRES_USER` | `postgres` | PostgreSQL username (docker-compose only) |
-| `POSTGRES_PASSWORD` | `postgres` | PostgreSQL password (docker-compose only) |
-| `POSTGRES_DB` | `uspsa_analytics` | PostgreSQL database name (docker-compose only) |
-| `SECRET_KEY` | `changeme` | Application secret key |
-| `REDIS_URL` | required | Redis connection string |
-| `CACHE_TTL` | `86400` | Cache TTL in seconds (24 hours) |
-| `ENVIRONMENT` | `development` | `development` or `production` |
-| `LOG_LEVEL` | `INFO` | Logging level |
+| Variable | Description |
+|---|---|
+| `DATABASE_URL` | PostgreSQL connection string (required) |
+| `POSTGRES_USER` | PostgreSQL username — docker-compose only |
+| `POSTGRES_PASSWORD` | PostgreSQL password — must be set; no default |
+| `POSTGRES_DB` | PostgreSQL database name (default: `uspsa_analytics`) |
+| `SECRET_KEY` | Application secret key — generate with `openssl rand -hex 32` |
+| `REDIS_URL` | Redis connection string (required) |
+| `REDIS_PASSWORD` | Redis auth password — required; no default |
+| `CACHE_TTL` | Cache TTL in seconds (default: `86400` = 24 hours) |
+| `ALLOWED_HOSTS` | Comma-separated allowed hostnames (default: `localhost,127.0.0.1`) |
+| `ENVIRONMENT` | `development` or `production` |
+| `LOG_LEVEL` | Logging level (default: `INFO`) |
 
-Copy `.env.example` to `.env` and update values before running.
+Copy `.env.example` to `.env` and replace **every** `<placeholder>` with a real value before running.
 
 ## Testing
 
 The test suite uses SQLite in-memory — no running database or Redis required.
 
 ```bash
-# One-time setup (if you haven't already)
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+# One-time setup
+uv sync
 
 # Run all tests
-pytest
+uv run pytest
 
 # Run with verbose output
-pytest -v
+uv run pytest -v
 
 # Run a specific test file
-pytest tests/test_analytics_engine.py
+uv run pytest tests/test_analytics_engine.py
 
 # Run a specific test class or case
-pytest tests/test_routes.py::TestGetMember
-pytest tests/test_routes.py::TestGetMember::test_returns_404_for_unknown_member
+uv run pytest tests/test_routes.py::TestGetMember
+uv run pytest tests/test_routes.py::TestGetMember::test_returns_404_for_unknown_member
 ```
 
 The test suite covers:
@@ -230,12 +229,10 @@ The following security measures are in place:
 
 ### Before you start
 
-Copy `.env.example` to `.env` and replace **every** angle-bracket placeholder with a real value before running:
-
 ```bash
 cp .env.example .env
-# Edit .env — replace <set-strong-password>, <generate-with-openssl-rand-hex-32>, etc.
-openssl rand -hex 32   # generate a value for SECRET_KEY
+# Replace every <placeholder> in .env with a real value
+openssl rand -hex 32   # use this output for SECRET_KEY
 ```
 
 ### Render
