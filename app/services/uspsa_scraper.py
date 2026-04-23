@@ -310,10 +310,11 @@ def _parse_classifier_scores(soup: BeautifulSoup) -> list[dict]:
                 else:
                     entry[key] = val
 
-            # Extract href from Source cell (e.g. /match-results-details?index=69296)
-            src_idx = col.get("source")
-            if src_idx is not None and src_idx < len(cells):
-                link = cells[src_idx].find("a")
+            # Extract href from Club cell — the club name is a link to
+            # /match-results-details?index=N which has the real match name.
+            club_idx = col.get("club")
+            if club_idx is not None and club_idx < len(cells):
+                link = cells[club_idx].find("a")
                 if link and link.get("href"):
                     href = str(link["href"])
                     if href.startswith("/"):
