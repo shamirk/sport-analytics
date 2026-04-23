@@ -1085,15 +1085,20 @@ function renderMrTable() {
   });
 }
 
-// ── Event listener setup (replaces inline onclick/onchange in HTML) ───
-document.getElementById('refreshBtn').addEventListener('click', refreshData);
-document.getElementById('retryBtn').addEventListener('click', loadDashboard);
-document.getElementById('mrScrapeBtn').addEventListener('click', triggerPractiscoreScrape);
-document.getElementById('mrRefreshBtn').addEventListener('click', triggerPractiscoreScrape);
-document.getElementById('mrRetryBtn').addEventListener('click', loadPractiscoreData);
-document.getElementById('globalDivisionFilter').addEventListener('change', onDivisionChange);
-document.getElementById('dateFrom').addEventListener('change', updateTimeSeriesChart);
-document.getElementById('dateTo').addEventListener('change', updateTimeSeriesChart);
+// ── Event listener setup (null-safe to prevent one missing element
+//    from silently breaking all subsequent listeners) ───────────────
+function on(id, event, fn) {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener(event, fn);
+}
+on('refreshBtn',            'click',  refreshData);
+on('retryBtn',              'click',  loadDashboard);
+on('mrScrapeBtn',           'click',  triggerPractiscoreScrape);
+on('mrRefreshBtn',          'click',  triggerPractiscoreScrape);
+on('mrRetryBtn',            'click',  loadPractiscoreData);
+on('globalDivisionFilter',  'change', onDivisionChange);
+on('dateFrom',              'change', updateTimeSeriesChart);
+on('dateTo',                'change', updateTimeSeriesChart);
 
 document.querySelectorAll('[data-tab]').forEach(btn => {
   btn.addEventListener('click', () => switchTab(btn.dataset.tab));
