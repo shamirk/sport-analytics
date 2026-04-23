@@ -3,7 +3,7 @@ FROM python:3.11-slim
 WORKDIR /code
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
+    build-essential \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
@@ -14,7 +14,7 @@ ENV UV_SYSTEM_PYTHON=1
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project
 
-RUN playwright install chromium --with-deps
+RUN uv run playwright install chromium --with-deps
 
 COPY app/ ./app/
 RUN uv sync --frozen
