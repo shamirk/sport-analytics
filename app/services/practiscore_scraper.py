@@ -1,19 +1,22 @@
-"""PractiScore match-results scraper.
+"""PractiScore match-results scraper — USPSA-sourced match approach.
 
-Strategy
---------
-1.  Hit ``https://practiscore.com/results/new/by-member-number/{member_number}``
-    with curl_cffi (Chrome impersonation).  PractiScore uses Cloudflare with a
-    JS challenge so this will usually 403; if it does we fall back to Playwright.
+New flow (replacing the broken by-member-number URL):
 
-2.  Parse the member's match list from that page (table rows with match name,
-    date, division link).
+1.  Get match names (and optional direct PractiScore URLs) from USPSA via
+    ``uspsa_match_scraper.scrape_match_list()``.
 
-3.  For each match URL found, fetch the match-results page and parse the
-    competitors table (placement, shooter name, member number, division,
-    classification, percent of winner).
+2.  For each match:
+    a.  If USPSA page already had a PractiScore link, use it directly.
+    b.  Otherwise, search ``practiscore.com/results`` by match name:
+        - Try curl_cffi first (fast, bypasses CF on most pages).
+        - Fall back to Playwright if CF blocks.
 
-The caller (task_manager) is responsible for persisting to DB.
+3.  Once we have a PractiScore match URL, try fetching the results:
+    - Try the S3 JSON endpoint (no CF, very fast).
+    - Fall back to HTML scraping the match page.
+
+4.  Parse competitor rows, locate the queried member, return results in the
+    format expected by ``task_manager.scrape_practiscore_and_store``.
 """
 
 from __future__ import annotations
@@ -22,20 +25,22 @@ import asyncio
 import re
 from datetime import datetime
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 
 import structlog
 from bs4 import BeautifulSoup, Tag
 
 logger = structlog.get_logger(__name__)
 
-PS_MEMBER_URL = "https://practiscore.com/results/new/by-member-number/{member_number}"
-_CF_MARKERS = ("just a moment", "checking your browser", "enable javascript")
 _ALLOWED_HOSTS = frozenset({"practiscore.com", "www.practiscore.com"})
+_CF_MARKERS = ("just a moment", "checking your browser", "enable javascript")
+
+# PractiScore S3 bucket pattern: match data lives at
+# https://s3.amazonaws.com/ps-uploads/{uuid}/match_{uuid}.json
+_PS_S3_BASE = "https://s3.amazonaws.com/ps-uploads"
 
 
 def _validate_url(url: str) -> bool:
-    """Return True only if url uses http/https and targets an allowed host."""
     try:
         parsed = urlparse(url)
     except Exception:
@@ -43,59 +48,329 @@ def _validate_url(url: str) -> bool:
     return parsed.scheme in ("http", "https") and parsed.netloc in _ALLOWED_HOSTS
 
 
+def _is_cf_challenge(html: str) -> bool:
+    lower = html.lower()
+    return any(m in lower for m in _CF_MARKERS)
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
 async def scrape_member_matches(member_number: str) -> list[dict]:
-    """Return a list of match dicts scraped from PractiScore for *member_number*.
+    """Return a list of match dicts for *member_number*.
 
-    Each dict:
+    Each dict (compatible with task_manager):
         match_name          str
         match_date          str | None   (ISO YYYY-MM-DD)
         division            str
         match_level         int | None
-        practiscore_match_id str | None  (slug from URL)
+        practiscore_match_id str | None
         source_url          str | None
         total_competitors   int | None
         member_placement    int | None
         member_percent      float | None
-        results             list[dict]   — per-shooter rows
+        results             list[dict]
     """
-    url = PS_MEMBER_URL.format(member_number=member_number)
-    log = logger.bind(member_number=member_number)
-    log.info("practiscore_scrape_start", url=url)
+    from app.services.uspsa_match_scraper import scrape_match_list as uspsa_match_list
 
-    html = await _fetch_with_fallback(url)
-    if not html:
-        log.warning("practiscore_no_html")
+    log = logger.bind(member_number=member_number)
+
+    uspsa_matches = await uspsa_match_list(member_number)
+    log.info("practiscore_scrape_start", uspsa_matches=len(uspsa_matches))
+
+    if not uspsa_matches:
         return []
 
-    match_entries = _parse_member_match_list(html, member_number)
-    log.info("practiscore_match_list", count=len(match_entries))
-
     results: list[dict] = []
-    for entry in match_entries:
-        match_url = entry.get("source_url")
-        if not match_url:
-            results.append(entry)
-            continue
+    for match_info in uspsa_matches:
         try:
-            match_html = await _fetch_with_fallback(match_url)
-            if match_html:
-                _enrich_with_results(entry, match_html, member_number)
+            entry = await _process_match(match_info, member_number)
+            if entry:
+                results.append(entry)
         except Exception as exc:
             log.warning(
-                "practiscore_match_fetch_failed",
-                match_url=match_url,
+                "practiscore_match_failed",
+                match_name=match_info.get("match_name"),
                 error=str(exc),
             )
-        results.append(entry)
-        # polite delay between match fetches
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(0.5)
 
     log.info("practiscore_scrape_complete", matches=len(results))
     return results
+
+
+# ---------------------------------------------------------------------------
+# Per-match processing
+# ---------------------------------------------------------------------------
+
+async def _process_match(match_info: dict, member_number: str) -> dict:
+    """Build and enrich one match entry."""
+    match_name = match_info.get("match_name") or ""
+    log = logger.bind(match_name=match_name)
+
+    entry: dict = {
+        "match_name": match_name,
+        "match_date": match_info.get("match_date"),
+        "division": match_info.get("division") or "",
+        "match_level": match_info.get("match_level"),
+        "practiscore_match_id": None,
+        "source_url": None,
+        "total_competitors": None,
+        "member_placement": None,
+        "member_percent": None,
+        "results": [],
+    }
+
+    # 1. Try direct PractiScore URL from USPSA page
+    ps_url = match_info.get("practiscore_url")
+
+    # 2. Search PractiScore by match name
+    if not ps_url and match_name:
+        ps_url = await _find_practiscore_url(match_name, log)
+
+    if not ps_url:
+        log.debug("no_practiscore_url_found")
+        return entry  # return with null placements — match still recorded
+
+    if not _validate_url(ps_url):
+        log.warning("invalid_practiscore_url", url=ps_url)
+        return entry
+
+    entry["source_url"] = ps_url
+    match_id = _extract_match_id(ps_url)
+    entry["practiscore_match_id"] = match_id
+    log.debug("practiscore_url_found", url=ps_url)
+
+    # 3a. Try S3 JSON (fast, no CF)
+    if match_id and _looks_like_uuid(match_id):
+        json_data = await _fetch_ps_s3_json(match_id, log)
+        if json_data:
+            _enrich_from_json(entry, json_data, member_number)
+            return entry
+
+    # 3b. Fall back to HTML scraping the match page
+    html = await _fetch_with_fallback(ps_url)
+    if html and not _is_cf_challenge(html):
+        _enrich_with_results(entry, html, member_number)
+    else:
+        log.warning("practiscore_page_blocked_or_empty", url=ps_url)
+
+    return entry
+
+
+# ---------------------------------------------------------------------------
+# PractiScore URL discovery
+# ---------------------------------------------------------------------------
+
+async def _find_practiscore_url(match_name: str, log: Any) -> str | None:
+    """Search practiscore.com/results for *match_name*, return match URL."""
+    # Try 1: GET search URL via curl_cffi (fast, often bypasses CF)
+    search_url = (
+        f"https://practiscore.com/results?search={quote_plus(match_name)}"
+    )
+    try:
+        html = await _fetch_curl_cffi(search_url)
+        if html and not _is_cf_challenge(html):
+            url = _extract_first_match_url(html)
+            if url:
+                log.debug("found_via_curl_search", url=url)
+                return url
+    except Exception as exc:
+        log.debug("curl_search_failed", error=str(exc))
+
+    # Try 2: Playwright search (handles CF JS challenge)
+    try:
+        url = await _search_practiscore_playwright(match_name)
+        if url:
+            log.debug("found_via_playwright_search", url=url)
+            return url
+    except Exception as exc:
+        log.warning("playwright_search_failed", match_name=match_name, error=str(exc))
+
+    return None
+
+
+def _extract_first_match_url(html: str) -> str | None:
+    """Pull the first PractiScore match result URL from an HTML page."""
+    soup = BeautifulSoup(html, "html.parser")
+    for a in soup.find_all("a", href=True):
+        href = str(a["href"])
+        if re.search(r"/results/(new/)?[a-zA-Z0-9\-]{8,}", href):
+            if "/by-member-number" in href or "/search" in href:
+                continue
+            if href.startswith("/"):
+                href = "https://practiscore.com" + href
+            if _validate_url(href):
+                return href
+    return None
+
+
+async def _search_practiscore_playwright(match_name: str) -> str | None:
+    """Use Playwright to search practiscore.com/results and return the first match URL."""
+    from playwright.async_api import async_playwright, TimeoutError as PWTimeout
+
+    logger.debug("practiscore_playwright_search", match_name=match_name)
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        try:
+            ctx = await browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                )
+            )
+            page = await ctx.new_page()
+
+            try:
+                await page.goto(
+                    "https://practiscore.com/results",
+                    wait_until="load",
+                    timeout=45_000,
+                )
+            except PWTimeout:
+                logger.debug("practiscore_results_load_timeout")
+
+            # Wait past Cloudflare challenge
+            try:
+                await page.wait_for_function(
+                    "() => !document.title.toLowerCase().includes('just a moment') && "
+                    "!document.title.toLowerCase().includes('checking your browser')",
+                    timeout=30_000,
+                )
+            except PWTimeout:
+                logger.warning("practiscore_cf_timeout")
+                return None
+
+            await asyncio.sleep(2)
+
+            # Find search input — try common selectors
+            search_input = None
+            for sel in [
+                "input[type='search']",
+                "input[placeholder*='search' i]",
+                "input[placeholder*='match' i]",
+                "#search",
+                "input[name='search']",
+                ".search-input",
+            ]:
+                try:
+                    el = page.locator(sel).first
+                    if await el.is_visible(timeout=2_000):
+                        search_input = el
+                        break
+                except Exception:
+                    continue
+
+            if search_input is None:
+                logger.warning("practiscore_search_input_not_found")
+                # Try extracting links from page as-is (may have pre-loaded results)
+                return _extract_first_match_url(await page.content())
+
+            # Type search term (use up to 40 chars to avoid over-specific)
+            await search_input.click()
+            await search_input.fill(match_name[:40])
+            await asyncio.sleep(2.5)
+
+            html = await page.content()
+            return _extract_first_match_url(html)
+        finally:
+            await browser.close()
+
+
+# ---------------------------------------------------------------------------
+# PractiScore S3 JSON fetch
+# ---------------------------------------------------------------------------
+
+async def _fetch_ps_s3_json(match_id: str, log: Any) -> dict | None:
+    """Try fetching match JSON from PractiScore's S3 bucket (no CF)."""
+    # Known S3 URL formats
+    urls = [
+        f"{_PS_S3_BASE}/{match_id}/match_{match_id}.json",
+        f"{_PS_S3_BASE}/{match_id}/results.json",
+    ]
+    from curl_cffi.requests import AsyncSession
+
+    async with AsyncSession() as session:
+        for url in urls:
+            try:
+                resp = await session.get(url, timeout=15)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    log.debug("ps_s3_json_found", url=url)
+                    return data
+            except Exception as exc:
+                log.debug("ps_s3_json_failed", url=url, error=str(exc))
+
+    return None
+
+
+def _enrich_from_json(entry: dict, data: dict, member_number: str) -> None:
+    """Parse PractiScore S3 JSON and populate entry."""
+    # Top-level match metadata
+    match_def = data.get("match", {})
+    if not entry.get("match_name") and match_def.get("match_name"):
+        entry["match_name"] = match_def["match_name"]
+    if not entry.get("match_date") and match_def.get("match_date"):
+        entry["match_date"] = _parse_date_str(match_def["match_date"])
+    if match_def.get("match_level") and entry.get("match_level") is None:
+        entry["match_level"] = _safe_int(str(match_def["match_level"]))
+
+    # Competitor results — PS JSON structure varies; try common keys
+    competitors_raw = (
+        data.get("match_shooters")
+        or data.get("shooters")
+        or data.get("competitors")
+        or []
+    )
+    if not competitors_raw:
+        return
+
+    member_upper = member_number.upper()
+    competitors: list[dict] = []
+
+    for shooter in competitors_raw:
+        mem_num = (
+            shooter.get("sh_id")  # USPSA member number key in PS JSON
+            or shooter.get("sh_uid")
+            or shooter.get("member_number")
+            or ""
+        ).strip().upper()
+
+        name = (
+            shooter.get("sh_fn", "") + " " + shooter.get("sh_ln", "")
+        ).strip() or shooter.get("shooter_name") or shooter.get("name") or ""
+
+        division = shooter.get("sh_dvp") or shooter.get("division") or entry.get("division") or ""
+        classification = shooter.get("sh_cls") or shooter.get("classification")
+        placement = _safe_int(str(shooter.get("sh_place") or shooter.get("placement") or ""))
+        pct = _safe_float(str(shooter.get("sh_pcnt") or shooter.get("percent_of_winner") or ""))
+
+        is_member = bool(mem_num and mem_num == member_upper) or (
+            not mem_num and member_upper in name.upper()
+        )
+
+        comp = {
+            "shooter_name": name,
+            "member_number": mem_num or None,
+            "division": division,
+            "classification": classification,
+            "total_points": None,
+            "total_time": None,
+            "percent_of_winner": pct,
+            "placement": placement,
+            "is_queried_member": is_member,
+        }
+        competitors.append(comp)
+
+        if is_member:
+            entry["member_placement"] = placement
+            entry["member_percent"] = pct
+
+    entry["total_competitors"] = len(competitors) if competitors else None
+    entry["results"] = competitors
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +378,6 @@ async def scrape_member_matches(member_number: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 async def _fetch_with_fallback(url: str) -> str | None:
-    """Try curl_cffi first, then Playwright."""
     if not _validate_url(url):
         logger.warning("practiscore_blocked_url", url=url)
         return None
@@ -158,16 +432,11 @@ async def _fetch_playwright(url: str, timeout_ms: int = 45_000) -> str:
                 )
             )
             page = await ctx.new_page()
-
-            # Use "load" instead of "networkidle" — Cloudflare keeps background
-            # requests alive indefinitely so networkidle never fires.
             try:
                 await page.goto(url, wait_until="load", timeout=timeout_ms)
             except PWTimeout:
-                # Page may still have usable content even after a timeout
                 logger.debug("playwright_load_timeout", url=url)
 
-            # Wait for Cloudflare JS challenge to resolve
             try:
                 await page.wait_for_function(
                     "() => !document.title.toLowerCase().includes('just a moment') && "
@@ -177,7 +446,6 @@ async def _fetch_playwright(url: str, timeout_ms: int = 45_000) -> str:
             except PWTimeout:
                 logger.warning("cloudflare_challenge_timeout", url=url)
 
-            # Give the page JS a moment to render content
             await asyncio.sleep(2)
             html = await page.content()
             logger.debug("playwright_got_content", url=url, bytes=len(html))
@@ -186,175 +454,17 @@ async def _fetch_playwright(url: str, timeout_ms: int = 45_000) -> str:
             await browser.close()
 
 
-def _is_cf_challenge(html: str) -> bool:
-    lower = html.lower()
-    return any(m in lower for m in _CF_MARKERS)
-
-
 # ---------------------------------------------------------------------------
-# Parsing: member match list
-# ---------------------------------------------------------------------------
-
-def _parse_member_match_list(html: str, member_number: str) -> list[dict]:
-    """Parse the ``/results/new/by-member-number/{member}`` page.
-
-    PractiScore renders a table with columns like:
-        Match Name | Date | Division | Class | Place | Pct
-    and links each match name to ``/results/new/{uuid}`` or ``/results/{slug}``.
-    """
-    soup = BeautifulSoup(html, "html.parser")
-    matches: list[dict] = []
-
-    # Try to find the results table — PS uses a DataTable or similar
-    tables = soup.find_all("table")
-    for table in tables:
-        rows = table.find_all("tr")
-        if len(rows) < 2:
-            continue
-        header_cells = [td.get_text(strip=True).lower() for td in rows[0].find_all(["th", "td"])]
-        # Must have at least a match/name column and a date column
-        if not any("match" in h or "name" in h for h in header_cells):
-            continue
-
-        col = _col_map(header_cells, {
-            "match_name":  ["match", "name", "event"],
-            "match_date":  ["date"],
-            "division":    ["division", "div"],
-            "match_level": ["level", "lvl"],
-            "placement":   ["place", "rank", "pos"],
-            "percent":     ["pct", "percent", "%"],
-        })
-
-        for row in rows[1:]:
-            cells = row.find_all(["td", "th"])
-            if not cells:
-                continue
-
-            cell_texts = [c.get_text(strip=True) for c in cells]
-
-            # Match name + URL
-            name_idx = col.get("match_name", 0)
-            name_cell: Tag = cells[name_idx] if name_idx < len(cells) else cells[0]
-            match_name = name_cell.get_text(strip=True)
-            link = name_cell.find("a")
-            source_url: str | None = None
-            ps_match_id: str | None = None
-            if link and link.get("href"):
-                href = str(link["href"])
-                if href.startswith("/"):
-                    href = "https://practiscore.com" + href
-                if _validate_url(href):
-                    source_url = href
-                    ps_match_id = _extract_match_id(href)
-                else:
-                    logger.warning("practiscore_blocked_href", href=href)
-
-            if not match_name:
-                continue
-
-            # Date
-            date_idx = col.get("match_date")
-            raw_date = cell_texts[date_idx] if date_idx is not None and date_idx < len(cell_texts) else ""
-            match_date = _parse_date(raw_date)
-
-            # Division
-            div_idx = col.get("division")
-            division = cell_texts[div_idx].strip() if div_idx is not None and div_idx < len(cell_texts) else ""
-
-            # Level
-            lvl_idx = col.get("match_level")
-            match_level: int | None = None
-            if lvl_idx is not None and lvl_idx < len(cell_texts):
-                match_level = _safe_int(cell_texts[lvl_idx])
-
-            # Member's own placement & pct from this listing page
-            place_idx = col.get("placement")
-            member_placement: int | None = None
-            if place_idx is not None and place_idx < len(cell_texts):
-                member_placement = _safe_int(cell_texts[place_idx])
-
-            pct_idx = col.get("percent")
-            member_percent: float | None = None
-            if pct_idx is not None and pct_idx < len(cell_texts):
-                member_percent = _safe_float(cell_texts[pct_idx])
-
-            matches.append({
-                "match_name": match_name,
-                "match_date": match_date,
-                "division": division,
-                "match_level": match_level,
-                "practiscore_match_id": ps_match_id,
-                "source_url": source_url,
-                "total_competitors": None,
-                "member_placement": member_placement,
-                "member_percent": member_percent,
-                "results": [],
-            })
-
-    # Fallback: if no table found, look for match links in the page
-    if not matches:
-        matches = _parse_match_list_from_links(soup, member_number)
-
-    return matches
-
-
-def _parse_match_list_from_links(soup: BeautifulSoup, member_number: str) -> list[dict]:
-    """Fallback parser: find all /results/new/... links in the page."""
-    matches: list[dict] = []
-    seen: set[str] = set()
-
-    for a in soup.find_all("a", href=True):
-        href = str(a["href"])
-        if not re.search(r"/results/(new/)?[a-zA-Z0-9\-]+", href):
-            continue
-        if "/by-member-number" in href:
-            continue
-        if href.startswith("/"):
-            href = "https://practiscore.com" + href
-        if not _validate_url(href):
-            logger.warning("practiscore_blocked_href", href=href)
-            continue
-        ps_id = _extract_match_id(href)
-        if not ps_id or ps_id in seen:
-            continue
-        seen.add(ps_id)
-
-        # Try to get name from link text or surrounding context
-        name = a.get_text(strip=True) or ps_id
-        # Date from sibling text in the same row/li
-        parent = a.parent
-        raw_text = parent.get_text(" ", strip=True) if parent else ""
-        match_date = _find_date_in_text(raw_text)
-
-        matches.append({
-            "match_name": name,
-            "match_date": match_date,
-            "division": "",
-            "match_level": None,
-            "practiscore_match_id": ps_id,
-            "source_url": href,
-            "total_competitors": None,
-            "member_placement": None,
-            "member_percent": None,
-            "results": [],
-        })
-
-    return matches
-
-
-# ---------------------------------------------------------------------------
-# Parsing: individual match results page
+# HTML results-page parser (unchanged logic, used as fallback)
 # ---------------------------------------------------------------------------
 
 def _enrich_with_results(entry: dict, html: str, queried_member: str) -> None:
-    """Parse a match results page and attach competitor data to *entry*."""
+    """Parse a PractiScore match results HTML page and populate *entry*."""
     soup = BeautifulSoup(html, "html.parser")
 
-    # Attempt to extract match level from page title or metadata
     if entry.get("match_level") is None:
         entry["match_level"] = _extract_match_level(soup)
 
-    # Find the results table
     tables = soup.find_all("table")
     best_table = _find_results_table(tables)
     if best_table is None:
@@ -385,29 +495,31 @@ def _enrich_with_results(entry: dict, html: str, queried_member: str) -> None:
             continue
         texts = [c.get_text(strip=True) for c in cells]
 
-        placement = _safe_int(texts[col["placement"]]) if "placement" in col and col["placement"] < len(texts) else None
-        name = texts[col["shooter_name"]] if "shooter_name" in col and col["shooter_name"] < len(texts) else ""
-        mem_num = texts[col["member_number"]] if "member_number" in col and col["member_number"] < len(texts) else None
-        division = texts[col["division"]] if "division" in col and col["division"] < len(texts) else entry.get("division", "")
-        classification = texts[col["classification"]] if "classification" in col and col["classification"] < len(texts) else None
-        total_points = _safe_float(texts[col["total_points"]]) if "total_points" in col and col["total_points"] < len(texts) else None
-        total_time = _safe_float(texts[col["total_time"]]) if "total_time" in col and col["total_time"] < len(texts) else None
-        pct = _safe_float(texts[col["percent"]]) if "percent" in col and col["percent"] < len(texts) else None
+        def _get(key: str) -> str:
+            idx = col.get(key)
+            return texts[idx] if idx is not None and idx < len(texts) else ""
+
+        placement = _safe_int(_get("placement"))
+        name = _get("shooter_name")
+        mem_num = _get("member_number")
+        division = _get("division") or entry.get("division", "")
+        classification = _get("classification") or None
+        total_points = _safe_float(_get("total_points"))
+        total_time = _safe_float(_get("total_time"))
+        pct = _safe_float(_get("percent"))
 
         if not name:
             continue
 
-        is_member = bool(
-            mem_num and mem_num.upper() == member_upper
-        ) or (
+        is_member = bool(mem_num and mem_num.upper() == member_upper) or (
             not mem_num and member_upper in name.upper()
         )
 
         comp = {
             "shooter_name": name,
-            "member_number": (mem_num or "").strip() or None,
+            "member_number": mem_num.strip() or None,
             "division": division.strip(),
-            "classification": (classification or "").strip() or None,
+            "classification": classification,
             "total_points": total_points,
             "total_time": total_time,
             "percent_of_winner": pct,
@@ -425,7 +537,6 @@ def _enrich_with_results(entry: dict, html: str, queried_member: str) -> None:
 
 
 def _find_results_table(tables: list) -> Tag | None:
-    """Return the table most likely to contain match results."""
     best: Tag | None = None
     best_score = 0
     for table in tables:
@@ -447,12 +558,9 @@ def _find_results_table(tables: list) -> Tag | None:
 
 
 def _extract_match_level(soup: BeautifulSoup) -> int | None:
-    """Try to detect match level (1-4) from page content."""
     text = soup.get_text(" ", strip=True)
     m = re.search(r"level\s*([1-4])", text, re.IGNORECASE)
-    if m:
-        return int(m.group(1))
-    return None
+    return int(m.group(1)) if m else None
 
 
 # ---------------------------------------------------------------------------
@@ -460,34 +568,21 @@ def _extract_match_level(soup: BeautifulSoup) -> int | None:
 # ---------------------------------------------------------------------------
 
 def _extract_match_id(url: str) -> str | None:
-    """Extract PractiScore match slug/UUID from a URL."""
-    # /results/new/UUID or /results/slug
     m = re.search(r"/results/(?:new/)?([a-zA-Z0-9\-]+)(?:/|$)", url)
     return m.group(1) if m else None
 
 
-def _parse_date(raw: str) -> str | None:
-    """Parse a date string into ISO format, trying common formats."""
-    raw = raw.strip()
+def _looks_like_uuid(s: str) -> bool:
+    return bool(re.match(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", s, re.IGNORECASE))
+
+
+def _parse_date_str(raw: str) -> str | None:
+    raw = (raw or "").strip()
     for fmt in ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d", "%B %d, %Y", "%b %d, %Y", "%d-%b-%Y"):
         try:
             return datetime.strptime(raw, fmt).date().isoformat()
         except ValueError:
             continue
-    return None
-
-
-def _find_date_in_text(text: str) -> str | None:
-    """Find the first date-like pattern in arbitrary text."""
-    patterns = [
-        r"\b(\d{1,2}/\d{1,2}/\d{2,4})\b",
-        r"\b(\d{4}-\d{2}-\d{2})\b",
-        r"\b([A-Za-z]+ \d{1,2},? \d{4})\b",
-    ]
-    for pat in patterns:
-        m = re.search(pat, text)
-        if m:
-            return _parse_date(m.group(1))
     return None
 
 

@@ -263,6 +263,9 @@ def _parse_classifier_scores(soup: BeautifulSoup) -> list[dict]:
       Row 0: ['Limited Optics Classifiers(Click to Expand)']  ← division title
       Row 1: ['Date', 'Number', 'Club', 'F', 'Percent', 'HF', 'Entered', 'Source']
       Row N: ['3/01/26', '99-11', 'Custer Sportsmens Club', 'Y', '66.7947', '7.0773', ...]
+
+    Also extracts the href from the Source cell (may point to
+    /match-results-details?index=N) and stores it as ``match_url``.
     """
     results = []
     for table in soup.find_all("table"):
@@ -289,17 +292,36 @@ def _parse_classifier_scores(soup: BeautifulSoup) -> list[dict]:
             "source": ["source"],
         })
 
-        for row in rows[2:]:
-            if len(row) < 4:
+        # Use raw TR elements so we can also extract links from Source cells.
+        # Filter to non-empty rows to match _table_rows indexing.
+        raw_trs = [tr for tr in table.find_all("tr") if tr.find_all(["td", "th"])]
+
+        for tr in raw_trs[2:]:  # skip title row (0) and header row (1)
+            cells = tr.find_all(["td", "th"])
+            if len(cells) < 4:
                 continue
             entry: dict = {"division": division}
             for key, idx in col.items():
-                if idx < len(row):
-                    val = row[idx]
-                    if key in ("hit_factor", "percentage"):
-                        entry[key] = _safe_float(val)
-                    else:
-                        entry[key] = val
+                if idx >= len(cells):
+                    continue
+                val = cells[idx].get_text(strip=True)
+                if key in ("hit_factor", "percentage"):
+                    entry[key] = _safe_float(val)
+                else:
+                    entry[key] = val
+
+            # Extract href from Source cell (e.g. /match-results-details?index=69296)
+            src_idx = col.get("source")
+            if src_idx is not None and src_idx < len(cells):
+                link = cells[src_idx].find("a")
+                if link and link.get("href"):
+                    href = str(link["href"])
+                    if href.startswith("/"):
+                        href = "https://uspsa.org" + href
+                    elif not href.startswith("http"):
+                        href = "https://uspsa.org/" + href
+                    entry["match_url"] = href
+
             results.append(entry)
 
     return results
