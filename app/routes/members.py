@@ -259,10 +259,25 @@ async def get_member_dashboard(
 async def get_member_status(
     member_number: str,
     request: Request,
+    job_id: str | None = None,
     db: Session = Depends(get_db),
 ):
-    """Return scraping status for a member: pending/in_progress/complete/error/not_started."""
+    """Return scraping status for a member: pending/in_progress/complete/error/not_started.
+
+    Pass ?job_id=<id> to check a specific job rather than the most recent one.
+    """
     member_number = _validate_member_number(member_number)
+
+    if job_id and job_id in job_status:
+        job = job_status[job_id]
+        resp: dict = {
+            "member_number": member_number,
+            "status": job["status"],
+            "job_id": job_id,
+        }
+        if job["status"] == "error":
+            resp["error"] = job.get("error_public", "Unknown error")
+        return resp
 
     member_jobs = [
         (jid, job) for jid, job in job_status.items()
@@ -270,8 +285,8 @@ async def get_member_status(
     ]
 
     if member_jobs:
-        jid, job = max(member_jobs, key=lambda x: x[0])
-        resp: dict = {
+        jid, job = max(member_jobs, key=lambda x: x[1].get("started_at") or "")
+        resp = {
             "member_number": member_number,
             "status": job["status"],
             "job_id": jid,

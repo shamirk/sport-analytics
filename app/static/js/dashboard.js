@@ -829,8 +829,7 @@ async function triggerPractiscoreScrape() {
 async function _pollPractiscoreJob(jobId) {
   const poll = async () => {
     try {
-      // We poll the generic status endpoint — it covers all job types
-      const resp = await fetch(`/api/member/${MEMBER}/status`);
+      const resp = await fetch(`/api/member/${MEMBER}/status?job_id=${encodeURIComponent(jobId)}`);
       if (!resp.ok) throw new Error(`Status check failed: ${resp.status}`);
       const body = await resp.json();
 
