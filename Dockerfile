@@ -17,6 +17,8 @@ RUN uv sync --frozen --no-install-project
 RUN uv run playwright install chromium --with-deps
 
 COPY app/ ./app/
+COPY alembic/ ./alembic/
+COPY alembic.ini ./
 RUN uv sync --frozen
 
 RUN useradd --system --no-create-home appuser && chown -R appuser /code
