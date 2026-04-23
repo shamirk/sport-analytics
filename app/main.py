@@ -5,6 +5,7 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -132,6 +133,12 @@ async def generic_error_handler(request: Request, exc: Exception):
         content={"error": "InternalError", "detail": "An unexpected error occurred", "code": "INTERNAL_ERROR"},
     )
 
+
+# ---------------------------------------------------------------------------
+# Static files
+# ---------------------------------------------------------------------------
+
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 # ---------------------------------------------------------------------------
 # Routes
