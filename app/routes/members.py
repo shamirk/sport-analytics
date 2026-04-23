@@ -328,21 +328,20 @@ async def analyze_member_practiscore(
     response: Response,
     db: Session = Depends(get_db),
 ):
-    """Trigger a PractiScore scrape or return 200 if already cached.
+    """Trigger a fresh PractiScore scrape.
 
-    Returns 202 with job_id if scraping has been queued.
+    Always queues a new scrape (never returns cached data — POST is an
+    action, not a read).  Returns 202 with job_id.
     """
     member_number = _validate_member_number(member_number)
-
-    cached = cache.get(f"practiscore:{member_number}")
-    if cached:
-        response.status_code = 200
-        return {"status": "complete", "data": cached}
 
     pending = get_pending_job(member_number, job_type="practiscore")
     if pending:
         response.status_code = 202
         return {"status": "pending", "job_id": pending}
+
+    # Clear stale cache so the next GET returns fresh DB data after scrape
+    cache.delete(f"practiscore:{member_number}")
 
     job_id = create_job(member_number, job_type="practiscore")
     background_tasks.add_task(_run_practiscore_scrape, job_id, member_number)

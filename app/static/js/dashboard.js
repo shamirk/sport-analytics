@@ -788,6 +788,7 @@ async function fetchPractiscoreResults() {
 
 async function triggerPractiscoreScrape() {
   _mrLoading = true;
+  _mrData = null;  // clear stale data before re-scraping
   updateMrBanner('scraping');
   mrShow('mrLoading');
   mrHide('mrError');
@@ -1088,6 +1089,7 @@ function renderMrTable() {
 document.getElementById('refreshBtn').addEventListener('click', refreshData);
 document.getElementById('retryBtn').addEventListener('click', loadDashboard);
 document.getElementById('mrScrapeBtn').addEventListener('click', triggerPractiscoreScrape);
+document.getElementById('mrRefreshBtn').addEventListener('click', triggerPractiscoreScrape);
 document.getElementById('mrRetryBtn').addEventListener('click', loadPractiscoreData);
 document.getElementById('globalDivisionFilter').addEventListener('change', onDivisionChange);
 document.getElementById('dateFrom').addEventListener('change', updateTimeSeriesChart);

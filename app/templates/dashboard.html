@@ -340,6 +340,11 @@ th[data-sort].desc::after { content: ' \25BC'; font-size: 0.65em; }
     <!-- Content (hidden until data loads) -->
     <div id="mrContent" style="display:none;">
 
+      <!-- Refresh button always visible when content is shown -->
+      <div style="display:flex; justify-content:flex-end; margin-bottom:0.75rem;">
+        <button class="btn btn-secondary" id="mrRefreshBtn">Refresh Match Results</button>
+      </div>
+
       <!-- Stat cards -->
       <div class="mr-stat-cards" id="mrStatCards"></div>
 
