@@ -158,7 +158,14 @@ async def _fetch_playwright(url: str, timeout_ms: int = 45_000) -> str:
                 )
             )
             page = await ctx.new_page()
-            await page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+
+            # Use "load" instead of "networkidle" — Cloudflare keeps background
+            # requests alive indefinitely so networkidle never fires.
+            try:
+                await page.goto(url, wait_until="load", timeout=timeout_ms)
+            except PWTimeout:
+                # Page may still have usable content even after a timeout
+                logger.debug("playwright_load_timeout", url=url)
 
             # Wait for Cloudflare JS challenge to resolve
             try:
@@ -172,7 +179,9 @@ async def _fetch_playwright(url: str, timeout_ms: int = 45_000) -> str:
 
             # Give the page JS a moment to render content
             await asyncio.sleep(2)
-            return await page.content()
+            html = await page.content()
+            logger.debug("playwright_got_content", url=url, bytes=len(html))
+            return html
         finally:
             await browser.close()
 
