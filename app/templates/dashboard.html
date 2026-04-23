@@ -164,7 +164,7 @@ th[data-sort].desc::after { content: ' \25BC'; font-size: 0.65em; }
     <div class="member-number-heading">{{ member_number }}</div>
     <div class="last-scraped" id="lastScraped">Loading data…</div>
   </div>
-  <button class="btn btn-secondary" onclick="refreshData()">&#x21BA; Refresh</button>
+  <button class="btn btn-secondary" id="refreshBtn">&#x21BA; Refresh</button>
 </div>
 
 <!-- Error / loading states -->
@@ -172,7 +172,7 @@ th[data-sort].desc::after { content: ' \25BC'; font-size: 0.65em; }
   <div class="error-state">
     <div class="error-icon">&#x26A0;&#xFE0F;</div>
     <div class="error-message" id="pageErrorMsg"></div>
-    <button class="btn btn-primary" onclick="loadDashboard()">Retry</button>
+    <button class="btn btn-primary" id="retryBtn">Retry</button>
   </div>
 </div>
 
@@ -187,8 +187,8 @@ th[data-sort].desc::after { content: ' \25BC'; font-size: 0.65em; }
 
   <!-- ── Tab navigation ─────────────────────────────────────────────── -->
   <nav class="tab-nav">
-    <button class="tab-nav-btn active" onclick="switchTab('classifier')">Classifier Stats</button>
-    <button class="tab-nav-btn" onclick="switchTab('matchresults')">Match Results</button>
+    <button class="tab-nav-btn active" data-tab="classifier">Classifier Stats</button>
+    <button class="tab-nav-btn" data-tab="matchresults">Match Results</button>
   </nav>
 
   <!-- ════════════════════════════════════════════════════════════════ -->
@@ -207,7 +207,7 @@ th[data-sort].desc::after { content: ' \25BC'; font-size: 0.65em; }
     <!-- ── 2. Global Division Filter ─────────────────────────────── -->
     <div class="global-filter mb-2">
       <label>Division</label>
-      <select id="globalDivisionFilter" onchange="onDivisionChange()"></select>
+      <select id="globalDivisionFilter"></select>
     </div>
 
     <!-- ── 3. Overview Panel ─────────────────────────────────────── -->
@@ -225,21 +225,21 @@ th[data-sort].desc::after { content: ' \25BC'; font-size: 0.65em; }
       <div class="filter-bar">
         <label>View</label>
         <div class="toggle-group" id="tsViewToggles">
-          <button class="toggle-btn active" onclick="setTsView(this,'match')">Match View</button>
-          <button class="toggle-btn" onclick="setTsView(this,'classifier')">Classifier View</button>
+          <button class="toggle-btn active" data-ts-view="match">Match View</button>
+          <button class="toggle-btn" data-ts-view="classifier">Classifier View</button>
         </div>
         <label>Trend</label>
         <div class="toggle-group" id="tsTrendToggles">
-          <button class="toggle-btn active" onclick="setTsTrend(this,0)">None</button>
-          <button class="toggle-btn" onclick="setTsTrend(this,5)">Last 5</button>
-          <button class="toggle-btn" onclick="setTsTrend(this,10)">Last 10</button>
-          <button class="toggle-btn" onclick="setTsTrend(this,15)">Last 15</button>
-          <button class="toggle-btn" onclick="setTsTrend(this,20)">Last 20</button>
+          <button class="toggle-btn active" data-ts-trend="0">None</button>
+          <button class="toggle-btn" data-ts-trend="5">Last 5</button>
+          <button class="toggle-btn" data-ts-trend="10">Last 10</button>
+          <button class="toggle-btn" data-ts-trend="15">Last 15</button>
+          <button class="toggle-btn" data-ts-trend="20">Last 20</button>
         </div>
         <label>From</label>
-        <input type="date" id="dateFrom" onchange="updateTimeSeriesChart()" />
+        <input type="date" id="dateFrom" />
         <label>To</label>
-        <input type="date" id="dateTo" onchange="updateTimeSeriesChart()" />
+        <input type="date" id="dateTo" />
       </div>
       <div class="chart-wrap chart-wrap-tall">
         <canvas id="timeSeriesChart"></canvas>
@@ -254,16 +254,16 @@ th[data-sort].desc::after { content: ' \25BC'; font-size: 0.65em; }
       <div class="filter-bar">
         <label>View</label>
         <div class="toggle-group" id="hfViewToggles">
-          <button class="toggle-btn active" onclick="setHfView(this,'match')">Match View</button>
-          <button class="toggle-btn" onclick="setHfView(this,'classifier')">Classifier View</button>
+          <button class="toggle-btn active" data-hf-view="match">Match View</button>
+          <button class="toggle-btn" data-hf-view="classifier">Classifier View</button>
         </div>
         <label>Trend</label>
         <div class="toggle-group" id="hfTrendToggles">
-          <button class="toggle-btn active" onclick="setHfTrend(this,0)">None</button>
-          <button class="toggle-btn" onclick="setHfTrend(this,5)">Last 5</button>
-          <button class="toggle-btn" onclick="setHfTrend(this,10)">Last 10</button>
-          <button class="toggle-btn" onclick="setHfTrend(this,15)">Last 15</button>
-          <button class="toggle-btn" onclick="setHfTrend(this,20)">Last 20</button>
+          <button class="toggle-btn active" data-hf-trend="0">None</button>
+          <button class="toggle-btn" data-hf-trend="5">Last 5</button>
+          <button class="toggle-btn" data-hf-trend="10">Last 10</button>
+          <button class="toggle-btn" data-hf-trend="15">Last 15</button>
+          <button class="toggle-btn" data-hf-trend="20">Last 20</button>
         </div>
       </div>
       <div class="chart-wrap chart-wrap-tall">
@@ -317,7 +317,7 @@ th[data-sort].desc::after { content: ' \25BC'; font-size: 0.65em; }
     <!-- Scrape trigger banner -->
     <div class="mr-scrape-banner" id="mrScrapeBanner">
       <span id="mrBannerMsg">Load PractiScore match results for this member.</span>
-      <button class="btn btn-primary" onclick="triggerPractiscoreScrape()" id="mrScrapeBtn">
+      <button class="btn btn-primary" id="mrScrapeBtn">
         Fetch Match Results
       </button>
     </div>
@@ -333,7 +333,7 @@ th[data-sort].desc::after { content: ' \25BC'; font-size: 0.65em; }
       <div class="error-state">
         <div class="error-icon">&#x26A0;&#xFE0F;</div>
         <div class="error-message" id="mrErrorMsg"></div>
-        <button class="btn btn-primary" onclick="loadPractiscoreData()">Retry</button>
+        <button class="btn btn-primary" id="mrRetryBtn">Retry</button>
       </div>
     </div>
 

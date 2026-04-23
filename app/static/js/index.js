@@ -87,3 +87,5 @@ function showLoading(msg) {
 }
 function updateLoadingText(msg) { document.getElementById('loadingText').textContent = msg; }
 function hideLoading() { document.getElementById('loadingOverlay').classList.remove('visible'); }
+
+document.getElementById('lookupForm').addEventListener('submit', handleLookup);

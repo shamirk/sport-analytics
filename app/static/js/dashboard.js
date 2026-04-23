@@ -723,11 +723,8 @@ function switchTab(tabId) {
   document.querySelectorAll('.tab-nav-btn').forEach(btn => btn.classList.remove('active'));
   document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
   document.getElementById('tab-' + tabId).classList.add('active');
-  // Find the button by its onclick attribute pattern
-  document.querySelectorAll('.tab-nav-btn').forEach(btn => {
-    if (btn.getAttribute('onclick') && btn.getAttribute('onclick').includes(tabId)) {
-      btn.classList.add('active');
-    }
+  document.querySelectorAll('.tab-nav-btn[data-tab]').forEach(btn => {
+    if (btn.dataset.tab === tabId) btn.classList.add('active');
   });
 
   if (tabId === 'matchresults' && !_mrData && !_mrLoading) {
@@ -1088,18 +1085,41 @@ function renderMrTable() {
   });
 }
 
+// ── Event listener setup (replaces inline onclick/onchange in HTML) ───
+document.getElementById('refreshBtn').addEventListener('click', refreshData);
+document.getElementById('retryBtn').addEventListener('click', loadDashboard);
+document.getElementById('mrScrapeBtn').addEventListener('click', triggerPractiscoreScrape);
+document.getElementById('mrRetryBtn').addEventListener('click', loadPractiscoreData);
+document.getElementById('globalDivisionFilter').addEventListener('change', onDivisionChange);
+document.getElementById('dateFrom').addEventListener('change', updateTimeSeriesChart);
+document.getElementById('dateTo').addEventListener('change', updateTimeSeriesChart);
+
+document.querySelectorAll('[data-tab]').forEach(btn => {
+  btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+});
+document.querySelectorAll('[data-ts-view]').forEach(btn => {
+  btn.addEventListener('click', () => setTsView(btn, btn.dataset.tsView));
+});
+document.querySelectorAll('[data-ts-trend]').forEach(btn => {
+  btn.addEventListener('click', () => setTsTrend(btn, parseInt(btn.dataset.tsTrend, 10)));
+});
+document.querySelectorAll('[data-hf-view]').forEach(btn => {
+  btn.addEventListener('click', () => setHfView(btn, btn.dataset.hfView));
+});
+document.querySelectorAll('[data-hf-trend]').forEach(btn => {
+  btn.addEventListener('click', () => setHfTrend(btn, parseInt(btn.dataset.hfTrend, 10)));
+});
+
 // ── Table sort ────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
-  document.querySelectorAll('#mrTable th[data-sort]').forEach(th => {
-    th.addEventListener('click', () => {
-      const col = th.dataset.sort;
-      if (_mrSortCol === col) {
-        _mrSortDir = _mrSortDir === 'asc' ? 'desc' : 'asc';
-      } else {
-        _mrSortCol = col;
-        _mrSortDir = col === 'match_date' || col === 'match_name' ? 'asc' : 'asc';
-      }
-      if (_mrData) renderMrTable();
-    });
+document.querySelectorAll('#mrTable th[data-sort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const col = th.dataset.sort;
+    if (_mrSortCol === col) {
+      _mrSortDir = _mrSortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      _mrSortCol = col;
+      _mrSortDir = 'asc';
+    }
+    if (_mrData) renderMrTable();
   });
 });
