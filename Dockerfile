@@ -10,11 +10,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir uv
 
 ENV UV_SYSTEM_PYTHON=1
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project
 
-RUN uv run playwright install chromium --with-deps
+RUN uv run playwright install chromium --with-deps && chmod -R o+rx /ms-playwright
 
 COPY app/ ./app/
 COPY alembic/ ./alembic/
