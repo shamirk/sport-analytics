@@ -10,12 +10,13 @@ templates = Jinja2Templates(directory="app/templates")
 
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request, "index.html")
 
 
 @router.get("/dashboard/{member_number}", response_class=HTMLResponse)
 async def dashboard(request: Request, member_number: str):
     return templates.TemplateResponse(
+        request,
         "dashboard.html",
-        {"request": request, "member_number": member_number.upper()},
+        {"member_number": member_number.upper()},
     )
