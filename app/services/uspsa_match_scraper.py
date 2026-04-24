@@ -28,6 +28,8 @@ from bs4 import BeautifulSoup
 logger = structlog.get_logger(__name__)
 
 _LOADING_MARKERS = ("loading...", "loading…", "please wait", "just a moment")
+_ERROR_MARKERS = ("too many requests", "429", "access denied", "403 forbidden",
+                  "rate limit", "error", "not found", "404")
 
 
 async def scrape_match_list(member_number: str) -> list[dict]:
@@ -178,7 +180,11 @@ def _is_js_skeleton(html: str) -> bool:
 
 
 async def _fetch_all_playwright(urls: list[str]) -> dict[str, dict]:
-    """Fetch multiple USPSA match pages using one shared Playwright browser."""
+    """Fetch multiple USPSA match pages using one shared Playwright browser.
+
+    Uses a 2.5 s inter-request delay to stay below USPSA's rate limit.
+    Detects 429 / error pages and records them as empty (not a name).
+    """
     from playwright.async_api import async_playwright, TimeoutError as PWTimeout
 
     results: dict[str, dict] = {}
@@ -195,10 +201,25 @@ async def _fetch_all_playwright(urls: list[str]) -> dict[str, dict]:
                             "Chrome/120.0.0.0 Safari/537.36"
                         )
                     )
+                    nav_response = None
                     try:
-                        await page.goto(url, wait_until="load", timeout=30_000)
+                        nav_response = await page.goto(
+                            url, wait_until="load", timeout=30_000
+                        )
                     except PWTimeout:
                         logger.debug("playwright_load_timeout", url=url)
+
+                    # Skip 429 / server-error pages immediately
+                    if nav_response and nav_response.status in (429, 403, 503):
+                        logger.warning(
+                            "match_page_rate_limited",
+                            url=url,
+                            status=nav_response.status,
+                        )
+                        await page.close()
+                        results[url] = {}
+                        await asyncio.sleep(5.0)  # longer back-off on rate limit
+                        continue
 
                     # Wait for JS to replace "Loading..." with actual content
                     try:
@@ -223,7 +244,8 @@ async def _fetch_all_playwright(urls: list[str]) -> dict[str, dict]:
                     logger.warning("playwright_match_page_failed", url=url, error=str(exc))
                     results[url] = {}
 
-                await asyncio.sleep(0.3)
+                # Polite delay — prevents USPSA rate limiting
+                await asyncio.sleep(2.5)
         finally:
             await browser.close()
 
@@ -241,11 +263,17 @@ def _parse_match_page(html: str) -> dict:
 
     page_text = soup.get_text(" ", strip=True)
 
-    # Match name — find the first heading that isn't a loading placeholder
+    _bad = _LOADING_MARKERS + _ERROR_MARKERS
+
+    def _valid_name(text: str) -> bool:
+        t = text.lower().strip()
+        return bool(text) and len(text) > 5 and not any(m in t for m in _bad)
+
+    # Match name — find the first heading that isn't a placeholder or error page
     for tag in ("h1", "h2", "h3"):
         for el in soup.find_all(tag):
             text = el.get_text(strip=True)
-            if text and len(text) > 5 and not any(m in text.lower() for m in _LOADING_MARKERS):
+            if _valid_name(text):
                 result["match_name"] = text
                 break
         if "match_name" in result:
@@ -258,7 +286,7 @@ def _parse_match_page(html: str) -> dict:
         )
         if mn_match:
             candidate = mn_match.group(1).strip()
-            if not any(m in candidate.lower() for m in _LOADING_MARKERS):
+            if _valid_name(candidate):
                 result["match_name"] = candidate
 
     # Page title as last resort
@@ -266,7 +294,7 @@ def _parse_match_page(html: str) -> dict:
         title_el = soup.find("title")
         if title_el:
             text = re.sub(r"\s*[-|]\s*USPSA.*$", "", title_el.get_text(strip=True)).strip()
-            if text and not any(m in text.lower() for m in _LOADING_MARKERS):
+            if _valid_name(text):
                 result["match_name"] = text
 
     # Match date
