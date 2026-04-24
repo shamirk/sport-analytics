@@ -31,6 +31,12 @@ _LOADING_MARKERS = ("loading...", "loading…", "please wait", "just a moment")
 _ERROR_MARKERS = ("too many requests", "429", "access denied", "403 forbidden",
                   "rate limit", "error", "not found", "404")
 
+# Process-lifetime cache: USPSA match URL → parsed page info dict.
+# Match names never change, so caching indefinitely within a process is safe.
+# This prevents re-fetching the same USPSA pages on subsequent scrapes within
+# the same Docker session (e.g., every time the user clicks "Refresh").
+_url_info_cache: dict[str, dict] = {}
+
 
 async def scrape_match_list(member_number: str) -> list[dict]:
     """Return deduplicated match list for *member_number*.
@@ -93,27 +99,48 @@ async def scrape_match_list(member_number: str) -> list[dict]:
     )
 
     # --- Pass 2: fetch USPSA match pages ------------------------------------
-    # Step 2a: try curl_cffi for all URLs (fast)
+    # Step 2a: serve from process-lifetime cache (no USPSA request needed)
+    cached_results: dict[str, dict] = {}
+    uncached_urls: list[str] = []
+    for url in url_to_score:
+        if url in _url_info_cache:
+            cached_results[url] = _url_info_cache[url]
+            logger.debug("match_page_from_cache", url=url,
+                         match_name=_url_info_cache[url].get("match_name"))
+        else:
+            uncached_urls.append(url)
+
+    if cached_results:
+        logger.info("match_pages_cache_hit", count=len(cached_results))
+
+    # Step 2b: try curl_cffi for uncached URLs (fast)
     curl_results: dict[str, dict] = {}
     needs_playwright: list[str] = []
 
-    for url in url_to_score:
+    for url in uncached_urls:
         html = await _fetch_curl(url)
         if html and not _is_js_skeleton(html):
-            curl_results[url] = _parse_match_page(html)
+            info = _parse_match_page(html)
+            curl_results[url] = info
+            if info.get("match_name"):
+                _url_info_cache[url] = info
             logger.debug("match_page_curl_ok", url=url,
-                         match_name=curl_results[url].get("match_name"))
+                         match_name=info.get("match_name"))
         else:
             needs_playwright.append(url)
             logger.debug("match_page_needs_playwright", url=url)
 
-    # Step 2b: Playwright for pages that returned a JS skeleton (one browser)
+    # Step 2c: Playwright for pages that returned a JS skeleton (one browser)
     pw_results: dict[str, dict] = {}
     if needs_playwright:
         logger.info("match_pages_playwright", count=len(needs_playwright))
         pw_results = await _fetch_all_playwright(needs_playwright)
+        # Cache successful Playwright fetches
+        for url, info in pw_results.items():
+            if info.get("match_name"):
+                _url_info_cache[url] = info
 
-    all_page_info = {**curl_results, **pw_results}
+    all_page_info = {**cached_results, **curl_results, **pw_results}
 
     # --- Pass 3: build output -----------------------------------------------
     matches: list[dict] = []
