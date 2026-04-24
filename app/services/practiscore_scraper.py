@@ -60,6 +60,11 @@ def _is_cf_challenge(html: str) -> bool:
 async def scrape_member_matches(member_number: str) -> list[dict]:
     """Return a list of match dicts for *member_number*.
 
+    USPSA match data is always stored as the baseline so match names
+    appear in the table even when PractiScore is unreachable.
+    PractiScore results are added only when the USPSA match page
+    included a direct practiscore.com link.
+
     Each dict (compatible with task_manager):
         match_name          str
         match_date          str | None   (ISO YYYY-MM-DD)
@@ -84,17 +89,34 @@ async def scrape_member_matches(member_number: str) -> list[dict]:
 
     results: list[dict] = []
     for match_info in uspsa_matches:
-        try:
-            entry = await _process_match(match_info, member_number)
-            if entry:
-                results.append(entry)
-        except Exception as exc:
-            log.warning(
-                "practiscore_match_failed",
-                match_name=match_info.get("match_name"),
-                error=str(exc),
-            )
-        await asyncio.sleep(0.5)
+        # USPSA data is always the baseline — guaranteed to be stored
+        entry: dict = {
+            "match_name": match_info.get("match_name") or "",
+            "match_date": match_info.get("match_date"),
+            "division": match_info.get("division") or "",
+            "match_level": match_info.get("match_level"),
+            "practiscore_match_id": None,
+            "source_url": None,
+            "total_competitors": None,
+            "member_placement": None,
+            "member_percent": None,
+            "results": [],
+        }
+
+        # Enrich with PractiScore only if the USPSA page had a direct link
+        ps_url = match_info.get("practiscore_url")
+        if ps_url and _validate_url(ps_url):
+            entry["source_url"] = ps_url
+            entry["practiscore_match_id"] = _extract_match_id(ps_url)
+            try:
+                html = await _fetch_with_fallback(ps_url)
+                if html and not _is_cf_challenge(html):
+                    _enrich_with_results(entry, html, member_number)
+                    log.debug("practiscore_enriched", match_name=entry["match_name"])
+            except Exception as exc:
+                log.warning("practiscore_direct_fetch_failed", url=ps_url, error=str(exc))
+
+        results.append(entry)
 
     log.info("practiscore_scrape_complete", matches=len(results))
     return results
